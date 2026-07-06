@@ -1,0 +1,10 @@
+[package]
+name = "aleo-transfer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+jolt-sdk = { workspace = true, features = ["host"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+guest = { package = "aleo-transfer-guest", path = "./guest" }
