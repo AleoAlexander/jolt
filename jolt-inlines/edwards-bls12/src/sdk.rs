@@ -181,3 +181,172 @@ impl Fq {
         }
     }
 }
+
+// --- Division / inverse -----------------------------------------------------
+
+#[cfg(all(target_arch = "riscv64", not(feature = "host")))]
+impl Fq {
+    /// self / divisor via the DIVQ inline (advice inverse, verified by
+    /// multiplication in the sequence). Division by zero spoils the proof.
+    pub fn div(&self, divisor: &Fq) -> Fq {
+        let mut e = [0u64; 4];
+        unsafe {
+            use crate::{EDBLS_DIVQ_FUNCT3, EDBLS_FUNCT7, INLINE_OPCODE};
+            core::arch::asm!(
+                ".insn r {opcode}, {funct3}, {funct7}, {rd}, {rs1}, {rs2}",
+                opcode = const INLINE_OPCODE,
+                funct3 = const EDBLS_DIVQ_FUNCT3,
+                funct7 = const EDBLS_FUNCT7,
+                rd = in(reg) e.as_mut_ptr(),
+                rs1 = in(reg) self.e.as_ptr(),
+                rs2 = in(reg) divisor.e.as_ptr(),
+                options(nostack)
+            );
+        }
+        if is_fq_non_canonical(&e) {
+            jolt_inlines_sdk::spoil_proof();
+        }
+        Fq { e }
+    }
+}
+
+#[cfg(all(not(target_arch = "riscv64"), not(feature = "host")))]
+impl Fq {
+    pub fn div(&self, _divisor: &Fq) -> Fq {
+        panic!("Fq::div called on non-RISC-V target without host feature");
+    }
+}
+
+#[cfg(feature = "host")]
+impl Fq {
+    pub fn div(&self, divisor: &Fq) -> Fq {
+        let inv = ArkFq::new(BigInt(divisor.e))
+            .inverse()
+            .expect("division by zero in edwards-bls12 base field");
+        Fq {
+            e: (ArkFq::new(BigInt(self.e)) * inv).into_bigint().0,
+        }
+    }
+}
+
+impl Fq {
+    pub fn inverse(&self) -> Option<Fq> {
+        if self.is_zero() {
+            None
+        } else {
+            Some(Fq::ONE.div(self))
+        }
+    }
+
+    pub fn neg(&self) -> Fq {
+        Fq::ZERO.sub(self)
+    }
+}
+
+// --- Twisted Edwards point ops (extended coordinates, a = -1) ---------------
+//
+// Curve: -x^2 + y^2 = 1 + d*x^2*y^2 over Fq, d = 3021 (Aleo Edwards-BLS12).
+// Constants are locked to arkworks by tests (curve_constants_match_arkworks).
+
+/// d = 3021
+pub const COEFF_D: Fq = Fq { e: [0x0000000000000bcd, 0, 0, 0] };
+/// 2d = 6042
+const TWO_D: Fq = Fq { e: [0x000000000000179a, 0, 0, 0] };
+
+const GENERATOR_X: Fq = Fq {
+    e: [
+        0x894e2328f3ebca05,
+        0x6068dd2835790980,
+        0x6fed91c9ae9ebfa0,
+        0x09f1b5a5baf6acf0,
+    ],
+};
+const GENERATOR_Y: Fq = Fq {
+    e: [
+        0xb50a67bf1a806781,
+        0x4453c177aaf3131b,
+        0xd906b256080ba845,
+        0x09a20df36571ac3c,
+    ],
+};
+
+/// Extended twisted-Edwards coordinates (X, Y, T, Z), T = XY/Z.
+#[derive(Clone, Copy, Debug)]
+pub struct EdwardsPoint {
+    pub x: Fq,
+    pub y: Fq,
+    pub t: Fq,
+    pub z: Fq,
+}
+
+impl EdwardsPoint {
+    pub const IDENTITY: EdwardsPoint = EdwardsPoint {
+        x: Fq::ZERO,
+        y: Fq::ONE,
+        t: Fq::ZERO,
+        z: Fq::ONE,
+    };
+
+    pub fn generator() -> EdwardsPoint {
+        EdwardsPoint {
+            x: GENERATOR_X,
+            y: GENERATOR_Y,
+            t: GENERATOR_X.mul(&GENERATOR_Y),
+            z: Fq::ONE,
+        }
+    }
+
+    /// Unified addition (add-2008-hwcd-3 for a = -1): 8M + 1 small-constant M.
+    pub fn add(&self, other: &EdwardsPoint) -> EdwardsPoint {
+        let a = self.y.sub(&self.x).mul(&other.y.sub(&other.x));
+        let b = self.y.add(&self.x).mul(&other.y.add(&other.x));
+        let c = self.t.mul(&other.t).mul(&TWO_D);
+        let zz = self.z.mul(&other.z);
+        let d = zz.add(&zz);
+        let e = b.sub(&a);
+        let f = d.sub(&c);
+        let g = d.add(&c);
+        let h = b.add(&a);
+        EdwardsPoint {
+            x: e.mul(&f),
+            y: g.mul(&h),
+            t: e.mul(&h),
+            z: f.mul(&g),
+        }
+    }
+
+    /// Doubling (dbl-2008-hwcd for a = -1): 4S + 4M.
+    pub fn double(&self) -> EdwardsPoint {
+        let a = self.x.square();
+        let b = self.y.square();
+        let zz = self.z.square();
+        let c = zz.add(&zz);
+        let e = self.x.add(&self.y).square().sub(&a).sub(&b);
+        let g = b.sub(&a); // D + B with D = -A
+        let f = g.sub(&c);
+        let h = a.add(&b).neg(); // D - B
+        EdwardsPoint {
+            x: e.mul(&f),
+            y: g.mul(&h),
+            t: e.mul(&h),
+            z: f.mul(&g),
+        }
+    }
+
+    pub fn neg(&self) -> EdwardsPoint {
+        EdwardsPoint {
+            x: self.x.neg(),
+            y: self.y,
+            t: self.t.neg(),
+            z: self.z,
+        }
+    }
+
+    /// Canonical affine coordinates (two DIVQ inlines).
+    pub fn to_affine(&self) -> ([u64; 4], [u64; 4]) {
+        (
+            self.x.div(&self.z).to_canonical(),
+            self.y.div(&self.z).to_canonical(),
+        )
+    }
+}
