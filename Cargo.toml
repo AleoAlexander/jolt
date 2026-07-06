@@ -65,6 +65,8 @@ members = [
   "examples/collatz/guest",
   "examples/fibonacci",
   "examples/fibonacci/guest",
+  "examples/aleo-transfer",
+  "examples/aleo-transfer/guest",
   "examples/secp256k1-ecdsa-verify",
   "examples/secp256k1-ecdsa-verify/guest",
   "examples/p256-ecdsa-verify",
