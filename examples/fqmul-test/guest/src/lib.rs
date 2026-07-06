@@ -16,3 +16,16 @@ fn fqmul_chain(seed: u64) -> [u64; 4] {
     }
     x.to_canonical()
 }
+
+/// Control: identical chain in pure-software arkworks, for an honest
+/// like-for-like cycles/op comparison against the inline path.
+#[jolt::provable(stack_size = 131072, heap_size = 262144, max_trace_length = 4194304)]
+fn ark_chain(seed: u64) -> [u64; 4] {
+    use ark_ff::{BigInt, Field, PrimeField};
+    let three = ark_ed_on_bls12_377::Fq::new(BigInt::new([3, 0, 0, 0]));
+    let mut x = ark_ed_on_bls12_377::Fq::new(BigInt::new([seed, 0, 0, 0]));
+    for _ in 0..500 {
+        x = x.square() * three;
+    }
+    x.into_bigint().0
+}
