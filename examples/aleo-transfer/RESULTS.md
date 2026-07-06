@@ -38,3 +38,19 @@ The SDK's `field-inline` feature does not engage for `ark-ed-on-bls12-377` guest
 `unexpected cfg` warning). Approach-3 ceiling for Aleo primitives is therefore zero:
 a dedicated edwards-bls12 inline crate is the only path to the ≤4M target.
 
+## control-experiment — 2026-07-06 — inline vs a16z-optimized arkworks
+```
+fqmul_chain (EDBLS inline):   310,464 cycles / 1000 field ops = 310 cycles/op
+ark_chain (software control): 252,714 cycles / 1000 field ops = 252 cycles/op
+inline "speedup": 0.81x  (the inline is 19% SLOWER)
+```
+**Finding:** the advice-quotient inline pattern does not pay for a 253-bit modulus.
+The verification identity ab + wp = 2^256*w + c requires the full 4x4 w*p product
+(32 limb products) on top of a*b (32 products) = 64 products per op. secp256k1's
+inline wins only because its negated modulus is 1-2 limbs (~40 products total vs
+Montgomery's ~48). The a16z arkworks fork (dev/twist-shout) already emits
+well-scheduled ~252-cycle CIOS Montgomery mults on RV64. Verified foreign-field
+mul at 253 bits is instruction-count-parity with direct computation; no
+sequence-level trick changes this. Reaching >=5x per-op requires prover-side
+support (dedicated lookups / field-inline-style acceleration for this field) —
+upstream-collaboration scope, not fork-only scope.

@@ -26,6 +26,14 @@ pub fn main() {
     assert_eq!(out, expected_chain(seed), "guest/host mismatch");
     println!("fqmul_chain: {cycles} cycles for 1000 field ops ({} cycles/op)", cycles / 1000);
 
+    let ark_summary = guest::analyze_ark_chain(seed);
+    let ark_cycles = ark_summary.trace_len();
+    println!(
+        "ark_chain (software control): {ark_cycles} cycles ({} cycles/op) — inline speedup {:.2}x",
+        ark_cycles / 1000,
+        ark_cycles as f64 / cycles as f64
+    );
+
     // THE GATE: full prove+verify with the inlines in the trace.
     let target_dir = "/tmp/jolt-guest-targets";
     let mut program = guest::compile_fqmul_chain(target_dir);
