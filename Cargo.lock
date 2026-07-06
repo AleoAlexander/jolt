@@ -2594,6 +2594,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "fqmul-test"
+version = "0.1.0"
+dependencies = [
+ "fqmul-test-guest",
+ "jolt-inlines-edwards-bls12",
+ "jolt-sdk",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fqmul-test-guest"
+version = "0.1.0"
+dependencies = [
+ "jolt-inlines-edwards-bls12",
+ "jolt-sdk",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3380,6 +3399,18 @@ dependencies = [
  "blake3",
  "jolt-inlines-sdk",
  "rand 0.8.5",
+ "tracer",
+]
+
+[[package]]
+name = "jolt-inlines-edwards-bls12"
+version = "0.1.0"
+dependencies = [
+ "ark-ed-on-bls12-377",
+ "ark-ff 0.5.0 (git+https://github.com/a16z/arkworks-algebra?branch=dev%2Ftwist-shout)",
+ "ark-std 0.5.0",
+ "jolt-inlines-sdk",
+ "serde",
  "tracer",
 ]
 
