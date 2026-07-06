@@ -1,0 +1,22 @@
+[package]
+name = "jolt-inlines-edwards-bls12"
+version = "0.1.0"
+edition = "2021"
+description = "Edwards-BLS12 (Aleo curve) base-field inlines for Jolt VM"
+license = "MIT"
+homepage = "https://github.com/a16z/jolt/README.md"
+repository = "https://github.com/a16z/jolt"
+
+[features]
+default = []
+host = ["jolt-inlines-sdk/host"]
+
+[dependencies]
+jolt-inlines-sdk = { workspace = true }
+serde.workspace = true
+ark-ed-on-bls12-377 = { version = "0.5.0", default-features = false }
+ark-ff.workspace = true
+
+[dev-dependencies]
+tracer = { workspace = true, features = ["std", "test-utils"] }
+ark-std = { version = "0.5.0", default-features = false }

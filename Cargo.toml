@@ -64,6 +64,7 @@ members = [
   "jolt-inlines/bigint",
   "jolt-inlines/secp256k1",
   "jolt-inlines/grumpkin",
+  "jolt-inlines/edwards-bls12",
   "jolt-inlines/p256",
   "examples/btreemap/host",
   "examples/btreemap/guest",
@@ -73,6 +74,8 @@ members = [
   "examples/fibonacci/guest",
   "examples/aleo-transfer",
   "examples/aleo-transfer/guest",
+  "examples/fqmul-test",
+  "examples/fqmul-test/guest",
   "examples/secp256k1-ecdsa-verify",
   "examples/secp256k1-ecdsa-verify/guest",
   "examples/p256-ecdsa-verify",
@@ -445,5 +448,6 @@ jolt-inlines-blake2 = { path = "./jolt-inlines/blake2", default-features = false
 jolt-inlines-blake3 = { path = "./jolt-inlines/blake3", default-features = false }
 jolt-inlines-bigint = { path = "./jolt-inlines/bigint", default-features = false }
 jolt-inlines-secp256k1 = { path = "./jolt-inlines/secp256k1", default-features = false }
+jolt-inlines-edwards-bls12 = { path = "./jolt-inlines/edwards-bls12", default-features = false }
 jolt-inlines-grumpkin = { path = "./jolt-inlines/grumpkin", default-features = false }
 jolt-inlines-p256 = { path = "./jolt-inlines/p256", default-features = false }
