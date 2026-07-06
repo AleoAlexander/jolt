@@ -49,3 +49,58 @@ pub fn main() {
     let is_valid = verify_fn(seed, output, program_io.panic, proof);
     println!("verify time: {:.3}s, valid: {is_valid}", t.elapsed().as_secs_f64());
 }
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use ark_ed_on_bls12_377::Fq;
+    use ark_ff::{PrimeField, Zero};
+
+    fn fq_from_dec(s: &str) -> Fq {
+        let mut acc = Fq::zero();
+        let ten = Fq::from(10u64);
+        for b in s.bytes() {
+            assert!(b.is_ascii_digit(), "non-digit in field literal");
+            acc = acc * ten + Fq::from(u64::from(b - b'0'));
+        }
+        acc
+    }
+
+    fn vectors() -> serde_json::Value {
+        serde_json::from_str(include_str!("../vectors.json")).unwrap()
+    }
+
+    #[test]
+    fn poseidon_matches_snarkvm_vectors_host() {
+        let v = vectors();
+        for case in v["poseidon2_hash"].as_array().unwrap() {
+            let inputs: Vec<Fq> = case["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| fq_from_dec(i.as_str().unwrap()))
+                .collect();
+            let expected = fq_from_dec(case["output"].as_str().unwrap());
+            assert_eq!(guest::poseidon2_hash(&inputs), expected, "inputs {:?}", case["inputs"]);
+        }
+    }
+
+    #[test]
+    fn poseidon_matches_snarkvm_vector_in_guest() {
+        // The "12345" single-input case, executed inside the RISC-V guest.
+        let summary = guest::analyze_poseidon_hash_bench(12345);
+        let out: [u64; 4] = jolt_sdk::postcard::from_bytes(&summary.io_device.outputs).unwrap();
+        let v = vectors();
+        let case = v["poseidon2_hash"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| {
+                let ins = c["inputs"].as_array().unwrap();
+                ins.len() == 1 && ins[0].as_str().unwrap() == "12345"
+            })
+            .unwrap();
+        let expected = fq_from_dec(case["output"].as_str().unwrap()).into_bigint().0;
+        assert_eq!(out, expected);
+    }
+}

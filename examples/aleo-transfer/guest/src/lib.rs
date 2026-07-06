@@ -1,40 +1,97 @@
 // Performance model of an Aleo `credits.aleo/transfer_private` client-side
 // workload, executed as pure software inside a Jolt guest.
 //
-// This is NOT cryptographically valid Aleo code: Poseidon round constants and
-// the MDS matrix are pseudo-random junk, and the record structure is
-// approximated. It IS arithmetically faithful: the same curve
-// (twisted Edwards over the BLS12-377 scalar field, i.e. Aleo's Edwards-BLS12),
-// full-width (251-bit) scalar multiplications, and Poseidon permutations with
-// snarkVM's shape for this field (width 3, alpha = 17, 8 full + 31 partial
-// rounds). Montgomery field arithmetic is data-independent, so junk constants
-// cost the same cycles as real ones.
+// Poseidon2 here is the real snarkVM hash: vendored parameters (ARK/MDS/domain
+// generated from snarkVM by aleo-vectors-gen) and the exact sponge convention
+// (state = [capacity, rate0, rate1]; preimage = [domain, len, ...inputs];
+// permute between rate-chunks; squeeze rate0 after a final permute). Verified
+// against snarkVM-produced vectors in the host test suite.
 //
-// Modeled workload (all inside cycle markers):
-//   record_decrypt   1 var-base scalar mult (view-key ECDH) + 4 Poseidon perms
-//   serial_number    1 scalar mult + 2 perms
-//   schnorr_verify   2 scalar mults + 1 perm (request authorization)
-//   output_record x2 2 scalar mults (ephemeral + ECDH) + 6 perms each
-// Total: 8 full-width scalar mults, 19 Poseidon permutations.
+// The record/transition structure is still approximated (same op counts as a
+// real transfer: 8 full-width scalar mults + 19 Poseidon permutations), so
+// cycle totals are representative, not consensus-accurate.
 
 #![cfg_attr(feature = "guest", no_std)]
 #![no_main]
 
+mod vendored;
+
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_ff::fields::Field;
-use ark_ff::PrimeField;
+use ark_ff::{BigInt, PrimeField, Zero};
 use jolt::{end_cycle_tracking, start_cycle_tracking};
 
 use ark_ed_on_bls12_377::{EdwardsProjective, Fq, Fr};
 
-const T: usize = 3;
-const R_F: usize = 8;
-const R_P: usize = 31;
-const N_ROUNDS: usize = R_F + R_P;
+const _: () = assert!(vendored::POSEIDON2_ALPHA == 17, "sbox17 hardcodes alpha = 17");
+const _: () = assert!(vendored::POSEIDON2_T == 3, "state layout hardcodes t = 3");
 
-struct PoseidonParams {
-    rc: [[Fq; T]; N_ROUNDS],
-    mds: [[Fq; T]; T],
+pub fn fq_from_limbs(limbs: &[u64; 4]) -> Fq {
+    Fq::from_bigint(BigInt::new(*limbs)).expect("vendored constant exceeds modulus")
+}
+
+// x^17 = ((((x^2)^2)^2)^2) * x
+fn sbox17(x: Fq) -> Fq {
+    let x2 = x.square();
+    let x4 = x2.square();
+    let x8 = x4.square();
+    let x16 = x8.square();
+    x16 * x
+}
+
+fn mds_row(row: &[[u64; 4]; 3], state: &[Fq; 3]) -> Fq {
+    let mut acc = Fq::zero();
+    for (m, s) in row.iter().zip(state.iter()) {
+        acc += fq_from_limbs(m) * s;
+    }
+    acc
+}
+
+pub fn poseidon_perm(state: &mut [Fq; 3]) {
+    let full = vendored::POSEIDON2_FULL_ROUNDS;
+    let partial = vendored::POSEIDON2_PARTIAL_ROUNDS;
+    let partial_range = (full / 2)..(full / 2 + partial);
+    for round in 0..(full + partial) {
+        for (s, c) in state.iter_mut().zip(vendored::POSEIDON2_ARK[round].iter()) {
+            *s += fq_from_limbs(c);
+        }
+        if partial_range.contains(&round) {
+            state[0] = sbox17(state[0]);
+        } else {
+            for s in state.iter_mut() {
+                *s = sbox17(*s);
+            }
+        }
+        let new_state = [
+            mds_row(&vendored::POSEIDON2_MDS[0], state),
+            mds_row(&vendored::POSEIDON2_MDS[1], state),
+            mds_row(&vendored::POSEIDON2_MDS[2], state),
+        ];
+        *state = new_state;
+    }
+}
+
+/// snarkVM `N::hash_psd2`: sponge over state [capacity, rate0, rate1].
+pub fn poseidon2_hash(inputs: &[Fq]) -> Fq {
+    let mut state = [Fq::zero(); 3];
+    state[1] += fq_from_limbs(&vendored::POSEIDON2_DOMAIN);
+    state[2] += Fq::from(inputs.len() as u64);
+    let mut chunks = inputs.chunks(2).peekable();
+    if chunks.peek().is_some() {
+        // header chunk is followed by input chunks
+        poseidon_perm(&mut state);
+        while let Some(chunk) = chunks.next() {
+            state[1] += chunk[0];
+            if chunk.len() == 2 {
+                state[2] += chunk[1];
+            }
+            if chunks.peek().is_some() {
+                poseidon_perm(&mut state);
+            }
+        }
+    }
+    poseidon_perm(&mut state); // absorb -> squeeze transition
+    state[1]
 }
 
 fn xorshift(s: &mut u64) -> u64 {
@@ -46,77 +103,6 @@ fn xorshift(s: &mut u64) -> u64 {
     x
 }
 
-fn gen_params(seed: u64) -> PoseidonParams {
-    let mut s = seed | 1;
-    let mut rc = [[Fq::from(0u64); T]; N_ROUNDS];
-    for round in rc.iter_mut() {
-        for c in round.iter_mut() {
-            *c = Fq::from(xorshift(&mut s));
-        }
-    }
-    let mut mds = [[Fq::from(0u64); T]; T];
-    for row in mds.iter_mut() {
-        for c in row.iter_mut() {
-            *c = Fq::from(xorshift(&mut s));
-        }
-    }
-    PoseidonParams { rc, mds }
-}
-
-// x^17 = ((((x^2)^2)^2)^2) * x — 4 squarings + 1 mul, snarkVM's alpha for this field
-fn sbox17(x: Fq) -> Fq {
-    let x2 = x.square();
-    let x4 = x2.square();
-    let x8 = x4.square();
-    let x16 = x8.square();
-    x16 * x
-}
-
-fn mds_mul(state: &mut [Fq; T], mds: &[[Fq; T]; T]) {
-    let mut out = [Fq::from(0u64); T];
-    for (i, row) in mds.iter().enumerate() {
-        let mut acc = Fq::from(0u64);
-        for (j, m) in row.iter().enumerate() {
-            acc += *m * state[j];
-        }
-        out[i] = acc;
-    }
-    *state = out;
-}
-
-fn poseidon_perm(state: &mut [Fq; T], p: &PoseidonParams) {
-    let half = R_F / 2;
-    let mut round = 0;
-    for _ in 0..half {
-        for (x, c) in state.iter_mut().zip(p.rc[round].iter()) {
-            *x += c;
-        }
-        for x in state.iter_mut() {
-            *x = sbox17(*x);
-        }
-        mds_mul(state, &p.mds);
-        round += 1;
-    }
-    for _ in 0..R_P {
-        for (x, c) in state.iter_mut().zip(p.rc[round].iter()) {
-            *x += c;
-        }
-        state[0] = sbox17(state[0]);
-        mds_mul(state, &p.mds);
-        round += 1;
-    }
-    for _ in 0..half {
-        for (x, c) in state.iter_mut().zip(p.rc[round].iter()) {
-            *x += c;
-        }
-        for x in state.iter_mut() {
-            *x = sbox17(*x);
-        }
-        mds_mul(state, &p.mds);
-        round += 1;
-    }
-}
-
 // Full-width (mod-order) scalar, so scalar mults cost the real ~251 bits.
 fn full_scalar(s: &mut u64) -> Fr {
     let mut bytes = [0u8; 32];
@@ -126,24 +112,30 @@ fn full_scalar(s: &mut u64) -> Fr {
     Fr::from_le_bytes_mod_order(&bytes)
 }
 
+/// In-guest witness that the vendored Poseidon matches snarkVM: hashes a
+/// single field element exactly as `N::hash_psd2(&[input])`.
+#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 2097152)]
+fn poseidon_hash_bench(input: u64) -> [u64; 4] {
+    let out = poseidon2_hash(&[Fq::from(input)]);
+    out.into_bigint().0
+}
+
 // Small provable workload (~1.5M cycles): 1 full-width scalar mult + 1 Poseidon
 // perm. Sized so an end-to-end proof fits in laptop RAM, to measure real prover
 // throughput and extrapolate to the full transfer.
 #[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 2097152)]
 fn mult_bench(seed: u64) -> u64 {
-    let params = gen_params(seed);
     let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
     let g = EdwardsProjective::generator();
 
     let p = (g * full_scalar(&mut s)).into_affine();
     let mut state = [p.x, p.y, Fq::from(2u64)];
-    poseidon_perm(&mut state, &params);
+    poseidon_perm(&mut state);
     (state[0] + state[1]).into_bigint().0[0]
 }
 
 #[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 67108864)]
 fn transfer_private(seed: u64) -> u64 {
-    let params = gen_params(seed);
     let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
     let g = EdwardsProjective::generator();
 
@@ -154,7 +146,7 @@ fn transfer_private(seed: u64) -> u64 {
     let addr_pt = g * full_scalar(&mut s);
     let nonce_pt = g * full_scalar(&mut s);
 
-    let mut acc = Fq::from(0u64);
+    let mut acc = Fq::zero();
     let mut state = [Fq::from(seed), Fq::from(1u64), Fq::from(2u64)];
 
     start_cycle_tracking("transfer_total");
@@ -166,7 +158,7 @@ fn transfer_private(seed: u64) -> u64 {
     state[0] += shared.x;
     state[1] += shared.y;
     for _ in 0..4 {
-        poseidon_perm(&mut state, &params);
+        poseidon_perm(&mut state);
     }
     acc += state[0];
     end_cycle_tracking("record_decrypt");
@@ -174,7 +166,7 @@ fn transfer_private(seed: u64) -> u64 {
     // 2. Serial number / nullifier for the consumed record
     start_cycle_tracking("serial_number");
     for _ in 0..2 {
-        poseidon_perm(&mut state, &params);
+        poseidon_perm(&mut state);
     }
     let sn_pt = (g * full_scalar(&mut s)).into_affine();
     acc += sn_pt.x + state[0];
@@ -182,7 +174,7 @@ fn transfer_private(seed: u64) -> u64 {
 
     // 3. Request authorization (Schnorr verify): R' = z*G + e*PK
     start_cycle_tracking("schnorr_verify");
-    poseidon_perm(&mut state, &params);
+    poseidon_perm(&mut state);
     let e = full_scalar(&mut s);
     let z = full_scalar(&mut s);
     let r_prime = (g * z + pk * e).into_affine();
@@ -198,7 +190,7 @@ fn transfer_private(seed: u64) -> u64 {
         state[0] += eph.x;
         state[1] += shared_out.x;
         for _ in 0..6 {
-            poseidon_perm(&mut state, &params);
+            poseidon_perm(&mut state);
         }
         acc += state[0] + eph.y;
         end_cycle_tracking(label);

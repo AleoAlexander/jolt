@@ -295,7 +295,10 @@ name = "aleo-transfer"
 version = "0.1.0"
 dependencies = [
  "aleo-transfer-guest",
+ "ark-ed-on-bls12-377",
+ "ark-ff 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "jolt-sdk",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
