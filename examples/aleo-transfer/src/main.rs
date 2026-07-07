@@ -7,6 +7,35 @@ pub fn main() {
     let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
     let summary = guest::analyze_transfer_private(0xA1E0_0001_u64 as u64);
 
+    let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
+    let usdcx_summary = guest::analyze_usdcx_transfer_private(0xA1E0_0003_u64 as u64);
+    println!("usdcx_transfer_private trace: {} cycles", usdcx_summary.trace_len());
+    {
+        use jolt_inlines_edwards_bls12::sdk::MODULUS;
+        use jolt_prover_legacy::transcripts::{Blake2bTranscript, Transcript};
+        use jolt_prover_legacy::zkvm::field_accel::{
+            sumcheck::{prove_field_accel, verify_field_accel},
+            FieldAccelParams, FieldAccelWitness, FieldOpRecord,
+        };
+        let params = FieldAccelParams { modulus_limbs: MODULUS };
+        let records: Vec<FieldOpRecord> = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log()
+            .iter()
+            .map(|(x, y, z)| FieldOpRecord::new(*x, *y, *z, &params))
+            .collect();
+        let witness = FieldAccelWitness::from_records(&records, &params);
+        let log_n = witness.padded_len().trailing_zeros() as usize;
+        let t = std::time::Instant::now();
+        let proof = prove_field_accel::<jolt_sdk::F, _>(
+            &witness, &params, &mut Blake2bTranscript::new(b"field_accel"));
+        let prove_s = t.elapsed().as_secs_f64();
+        verify_field_accel(&proof, &params, log_n, &mut Blake2bTranscript::new(b"field_accel"))
+            .expect("usdcx gadget proof failed");
+        println!(
+            "usdcx field-accel gadget: {} records, prove {:.3}s",
+            records.len(), prove_s
+        );
+    }
+
     // B1 gadget cost at transfer scale: prove the invocation log of the trace
     {
         use jolt_inlines_edwards_bls12::sdk::MODULUS;
@@ -111,6 +140,21 @@ mod tests {
                 .collect();
             let expected = fq_from_dec(case["output"].as_str().unwrap());
             assert_eq!(guest::poseidon2_hash(&inputs), expected, "inputs {:?}", case["inputs"]);
+        }
+    }
+
+    #[test]
+    fn poseidon4_matches_snarkvm_vectors_host() {
+        let v = vectors();
+        for case in v["poseidon4_hash"].as_array().unwrap() {
+            let inputs: Vec<Fq> = case["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|i| fq_from_dec(i.as_str().unwrap()))
+                .collect();
+            let expected = fq_from_dec(case["output"].as_str().unwrap());
+            assert_eq!(guest::poseidon4_hash(&inputs), expected, "psd4 inputs {:?}", case["inputs"]);
         }
     }
 

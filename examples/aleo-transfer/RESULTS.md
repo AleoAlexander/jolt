@@ -93,3 +93,21 @@ performed by one batched sumcheck in 0.179 s — a ~700x reduction for the
 verification portion, at ~4 microseconds per field op. Final evals are clear
 (unbound); PCS binding, range checks (CARRY_BOUNDS.md), and BlindFold sync
 are Track C. Tamper tests confirm the gadget rejects corrupted logs.
+## usdcx-model — 2026-07-07 — usdcx_stablecoin.aleo transfer_private (B0 advice mode)
+```
+usdcx_total:            12,927,849 cycles   (vs 3,086,619 credits-model)
+  merkle_proofs:         8,962,739 cycles   (69% — 2 x 16-level psd4 proofs, 68 t=5 perms)
+  record_decrypt:          474,931
+  output_token_1/2 + output_compliance: ~2.5M (3 records vs 2)
+field-accel gadget:     146,766 records, prove 0.687s
+poseidon4 (t=5, rate 4): vendored from snarkVM, vector-exact vs hash_psd4
+```
+**Findings:** modeled from the on-chain program source: usdcx consumes 1 Token
+record, verifies TWO 16-level Merkle proofs in-circuit (hash.psd4), and emits
+THREE records. Even advice-accelerated it is 4.2x a plain credits transfer,
+and Merkle compliance checking dominates (t=5 perm ≈ 132K cycles ≈ 3,200 field
+ops). Software-only extrapolation (x~6 per field op): ~70M cycles. The gadget
+absorbs the 3.2x-larger invocation log (147K vs 46K records) in 0.69s.
+Implication: compliant-stablecoin workloads strengthen the field-acceleration
+case — they are ~4x heavier than credits transfers, almost entirely in
+Poseidon hashing.

@@ -191,3 +191,172 @@ fn transfer_private(seed: u64) -> u64 {
     acc = acc.add(&state[1]).add(&state[2]);
     acc.to_canonical()[0]
 }
+
+// --- usdcx_stablecoin.aleo transfer_private model ---------------------------
+//
+// Modeled from the on-chain program source (fetched 2026-07-08): consumes one
+// Token record, verifies TWO 16-level Merkle proofs in-circuit via hash.psd4
+// (Poseidon rate 4, t = 5), and produces THREE records (two Token + one
+// ComplianceRecord with 4 fields). Same modeling fidelity as transfer_private:
+// faithful op counts and real snarkVM parameters, approximated structure.
+
+mod vendored4;
+
+fn sbox17_5(x: Fq) -> Fq {
+    x.square().square().square().square().mul(&x)
+}
+
+fn mds_row5(row: &[[u64; 4]; 5], state: &[Fq; 5]) -> Fq {
+    let mut acc = Fq::ZERO;
+    for (m, s) in row.iter().zip(state.iter()) {
+        acc = acc.add(&Fq::from_canonical(*m).mul(s));
+    }
+    acc
+}
+
+pub fn poseidon4_perm(state: &mut [Fq; 5]) {
+    let full = vendored4::POSEIDON4_FULL_ROUNDS;
+    let partial = vendored4::POSEIDON4_PARTIAL_ROUNDS;
+    let partial_range = (full / 2)..(full / 2 + partial);
+    for round in 0..(full + partial) {
+        for (s, c) in state.iter_mut().zip(vendored4::POSEIDON4_ARK[round].iter()) {
+            *s = s.add(&Fq::from_canonical(*c));
+        }
+        if partial_range.contains(&round) {
+            state[0] = sbox17_5(state[0]);
+        } else {
+            for s in state.iter_mut() {
+                *s = sbox17_5(*s);
+            }
+        }
+        let new_state = [
+            mds_row5(&vendored4::POSEIDON4_MDS[0], state),
+            mds_row5(&vendored4::POSEIDON4_MDS[1], state),
+            mds_row5(&vendored4::POSEIDON4_MDS[2], state),
+            mds_row5(&vendored4::POSEIDON4_MDS[3], state),
+            mds_row5(&vendored4::POSEIDON4_MDS[4], state),
+        ];
+        *state = new_state;
+    }
+}
+
+/// snarkVM `N::hash_psd4`: rate-4 sponge, state [capacity, rate0..rate3].
+pub fn poseidon4_hash(inputs: &[Fq]) -> Fq {
+    let mut state = [Fq::ZERO; 5];
+    state[1] = state[1].add(&Fq::from_canonical(vendored4::POSEIDON4_DOMAIN));
+    state[2] = state[2].add(&Fq::from_u64(inputs.len() as u64));
+    let mut chunks = inputs.chunks(4).peekable();
+    if chunks.peek().is_some() {
+        poseidon4_perm(&mut state);
+        while let Some(chunk) = chunks.next() {
+            for (i, v) in chunk.iter().enumerate() {
+                state[1 + i] = state[1 + i].add(v);
+            }
+            if chunks.peek().is_some() {
+                poseidon4_perm(&mut state);
+            }
+        }
+    }
+    poseidon4_perm(&mut state);
+    state[1]
+}
+
+fn fq_rand(s: &mut u64) -> Fq {
+    let mut limbs = [0u64; 4];
+    for limb in limbs.iter_mut() {
+        *limb = xorshift(s);
+    }
+    limbs[3] &= (1u64 << 58) - 1;
+    Fq::from_canonical(limbs)
+}
+
+/// 16-level Merkle membership: leaf hash + 16 sibling hashes via psd4.
+fn merkle_verify_16(leaf: Fq, s: &mut u64) -> Fq {
+    let mut node = poseidon4_hash(&[leaf]);
+    for _ in 0..16 {
+        let sibling = fq_rand(s);
+        let bit = xorshift(s) & 1 == 1;
+        node = if bit {
+            poseidon4_hash(&[sibling, node])
+        } else {
+            poseidon4_hash(&[node, sibling])
+        };
+    }
+    node
+}
+
+#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 67108864)]
+fn usdcx_transfer_private(seed: u64) -> u64 {
+    let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+    let g = EdwardsPoint::generator();
+    let pk = g.scalar_mul(&full_scalar(&mut s));
+    let addr_pt = g.scalar_mul(&full_scalar(&mut s));
+    let nonce_pt = g.scalar_mul(&full_scalar(&mut s));
+
+    let mut acc = Fq::ZERO;
+    let mut state = [Fq::from_u64(seed), Fq::from_u64(1), Fq::from_u64(2)];
+
+    start_cycle_tracking("usdcx_total");
+
+    // 1. Input Token record decryption
+    start_cycle_tracking("record_decrypt");
+    let vk = full_scalar(&mut s);
+    let (sx, sy) = nonce_pt.scalar_mul(&vk).to_affine();
+    state[0] = state[0].add(&Fq::from_canonical(sx));
+    state[1] = state[1].add(&Fq::from_canonical(sy));
+    for _ in 0..4 {
+        poseidon_perm(&mut state);
+    }
+    acc = acc.add(&state[0]);
+    end_cycle_tracking("record_decrypt");
+
+    // 2. Serial number
+    start_cycle_tracking("serial_number");
+    for _ in 0..2 {
+        poseidon_perm(&mut state);
+    }
+    let (snx, _) = g.scalar_mul(&full_scalar(&mut s)).to_affine();
+    acc = acc.add(&Fq::from_canonical(snx)).add(&state[0]);
+    end_cycle_tracking("serial_number");
+
+    // 3. Request authorization
+    start_cycle_tracking("schnorr_verify");
+    poseidon_perm(&mut state);
+    let e = full_scalar(&mut s);
+    let z = full_scalar(&mut s);
+    let (rx, _) = g.scalar_mul(&z).add(&pk.scalar_mul(&e)).to_affine();
+    acc = acc.add(&Fq::from_canonical(rx));
+    end_cycle_tracking("schnorr_verify");
+
+    // 4. TWO 16-level Merkle proofs (usdcx compliance credential checks)
+    start_cycle_tracking("merkle_proofs");
+    let root1 = merkle_verify_16(fq_rand(&mut s), &mut s);
+    let root2 = merkle_verify_16(fq_rand(&mut s), &mut s);
+    acc = acc.add(&root1).add(&root2);
+    end_cycle_tracking("merkle_proofs");
+
+    // 5. THREE output records: Token x2 (6 perms), ComplianceRecord (7 perms)
+    for (label, n_perms) in [
+        ("output_token_1", 6usize),
+        ("output_token_2", 6),
+        ("output_compliance", 7),
+    ] {
+        start_cycle_tracking(label);
+        let esk = full_scalar(&mut s);
+        let eph = g.scalar_mul(&esk);
+        let (ephx, ephy) = eph.to_affine();
+        let (sox, _) = addr_pt.scalar_mul(&esk).to_affine();
+        state[0] = state[0].add(&Fq::from_canonical(ephx));
+        state[1] = state[1].add(&Fq::from_canonical(sox));
+        for _ in 0..n_perms {
+            poseidon_perm(&mut state);
+        }
+        acc = acc.add(&state[0]).add(&Fq::from_canonical(ephy));
+        end_cycle_tracking(label);
+    }
+
+    end_cycle_tracking("usdcx_total");
+
+    acc = acc.add(&state[1]).add(&state[2]);
+    acc.to_canonical()[0]
+}
