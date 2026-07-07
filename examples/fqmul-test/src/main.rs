@@ -57,4 +57,46 @@ pub fn main() {
     println!("valid: {is_valid}");
     assert!(is_valid, "M3 GATE FAILED: proof did not verify");
     println!("M3 gate PASSED: inlines prove and verify end-to-end");
+
+    // B1 GATE: the field-accel side proof over the invocation log captured
+    // during the trace passes above. PROTOTYPE: final evals unbound (no PCS);
+    // this demonstrates the gadget's prover/verifier flow and cost.
+    use jolt_inlines_edwards_bls12::sdk::MODULUS;
+    use jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log;
+    use jolt_prover_legacy::transcripts::{Blake2bTranscript, Transcript};
+    use jolt_prover_legacy::zkvm::field_accel::{
+        sumcheck::{prove_field_accel, verify_field_accel},
+        FieldAccelParams, FieldAccelWitness, FieldOpRecord,
+    };
+
+    let params = FieldAccelParams { modulus_limbs: MODULUS };
+    let log = take_field_op_log();
+    let records: Vec<FieldOpRecord> = log
+        .iter()
+        .map(|(x, y, z)| FieldOpRecord::new(*x, *y, *z, &params))
+        .collect();
+    println!("field-accel log: {} records", records.len());
+
+    let witness = FieldAccelWitness::from_records(&records, &params);
+    let log_n = witness.padded_len().trailing_zeros() as usize;
+
+    let now = std::time::Instant::now();
+    let gadget_proof =
+        prove_field_accel::<jolt_sdk::F, _>(&witness, &params, &mut Blake2bTranscript::new(b"field_accel"));
+    let gadget_prove_time = now.elapsed().as_secs_f64();
+
+    let now = std::time::Instant::now();
+    verify_field_accel(
+        &gadget_proof,
+        &params,
+        log_n,
+        &mut Blake2bTranscript::new(b"field_accel"),
+    )
+    .expect("B1 GATE FAILED: gadget proof did not verify");
+    println!(
+        "B1 gate PASSED: gadget sumcheck over {} records proved in {:.3}s, verified in {:.3}s",
+        records.len(),
+        gadget_prove_time,
+        now.elapsed().as_secs_f64()
+    );
 }
