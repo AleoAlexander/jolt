@@ -83,6 +83,7 @@ transcript-blake2b = []
 [dependencies]
 akita-config = { workspace = true, optional = true }
 akita-field = { workspace = true, optional = true }
+num-bigint.workspace = true
 ark-bn254.workspace = true
 jolt-optimizations.workspace = true
 ark-ec.workspace = true
