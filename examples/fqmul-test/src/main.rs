@@ -34,7 +34,8 @@ pub fn main() {
         ark_cycles as f64 / cycles as f64
     );
 
-    // THE GATE: full prove+verify with the inlines in the trace.
+    // PROTOTYPE: unsound until B1 — the advice results are not yet bound by
+    // any verification; this prove/verify only exercises the pipeline shape.
     let target_dir = "/tmp/jolt-guest-targets";
     let mut program = guest::compile_fqmul_chain(target_dir);
     let shared = guest::preprocess_shared_fqmul_chain(&mut program).expect("preprocessing");
