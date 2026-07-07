@@ -36,6 +36,8 @@ akita = [
   "jolt-field/akita",
   "jolt-verifier/akita",
 ]
+# B1 field-acceleration prototype: standalone batched sumcheck (zkvm/field_accel/sumcheck.rs)
+field-accel-prototype = []
 zk = ["dory/zk", "dep:jolt-blindfold", "jolt-verifier/zk"]
 host = [
   "prover",
