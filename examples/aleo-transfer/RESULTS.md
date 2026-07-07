@@ -54,3 +54,28 @@ mul at 253 bits is instruction-count-parity with direct computation; no
 sequence-level trick changes this. Reaching >=5x per-op requires prover-side
 support (dedicated lookups / field-inline-style acceleration for this field) —
 upstream-collaboration scope, not fork-only scope.
+## B0-advice-only — 2026-07-07 — 1cbe251a
+```
+"record_decrypt": 427452 RV64IMAC cycles + 44560 virtual instructions = 472012 total cycles
+"serial_number": 333802 RV64IMAC cycles + 35440 virtual instructions = 369242 total cycles
+"schnorr_verify": 491481 RV64IMAC cycles + 54152 virtual instructions = 545633 total cycles
+"output_record_1": 769389 RV64IMAC cycles + 80752 virtual instructions = 850141 total cycles
+"output_record_2": 768665 RV64IMAC cycles + 80896 virtual instructions = 849561 total cycles
+"transfer_total": 2790819 RV64IMAC cycles + 295800 virtual instructions = 3086619 total cycles
+total trace length (cycles): 3848359
+trace length (cycles): 305808
+2026-07-07T15:01:09.741958Z  INFO jolt_prover_legacy::zkvm::prover: 275556 raw RISC-V instructions + 30252 virtual instructions = 305808 total cycles
+prover time: 2.99s  (102284 cycles/s)
+proof size: 85905 bytes
+verify time: 0.074s, valid: true
+1749630976  maximum resident set size
+```
+
+**B0 gate analysis (3.086M vs the ≤3M criterion, +2.9%):** the field-op-share
+assumption held — the 5.7x reduction matches the 1.5-3M projection band. The
+overage is attributable, not structural: (a) the SDK wrapper costs ~41
+cycles/op, of which ~16 is the canonicity comparison after every advice op —
+a batched-check or trusted-advice design cuts this; (b) scalar mult is plain
+double-and-add (~375 point ops); a 4-bit window removes ~90 adds/mult. Both
+are Track C design choices, not prototype blockers. mult_bench proof: 306K
+cycles, 2.99s prove, 1.75GB RSS (was 5.3GB), 85.9KB proof, 74ms verify.
