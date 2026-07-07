@@ -8,6 +8,7 @@ jolt-sdk = { workspace = true, features = ["host"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 guest = { package = "aleo-transfer-guest", path = "./guest" }
+jolt-inlines-edwards-bls12 = { workspace = true, features = ["host"] }
 
 [dev-dependencies]
 serde_json = "1"
