@@ -360,3 +360,184 @@ fn usdcx_transfer_private(seed: u64) -> u64 {
     acc = acc.add(&state[1]).add(&state[2]);
     acc.to_canonical()[0]
 }
+
+// --- Software (arkworks) twins: direct measurement of the unaccelerated cost.
+// Same style as the phase0-complete baseline (ark types, fq_from_limbs
+// conversions per vendored constant) so numbers are comparable to the
+// recorded 17.59M software transfer.
+
+use ark_ec::{CurveGroup, PrimeGroup};
+use ark_ff::fields::Field as ArkField;
+use ark_ff::{BigInt, PrimeField, Zero};
+type AFq = ark_ed_on_bls12_377::Fq;
+type AProj = ark_ed_on_bls12_377::EdwardsProjective;
+
+fn afq_from_limbs(limbs: &[u64; 4]) -> AFq {
+    AFq::from_bigint(BigInt::new(*limbs)).expect("vendored constant exceeds modulus")
+}
+
+fn asbox17(x: AFq) -> AFq {
+    let x2 = x.square();
+    let x4 = x2.square();
+    let x8 = x4.square();
+    x8.square() * x
+}
+
+fn poseidon_perm_soft(state: &mut [AFq; 3]) {
+    let full = vendored::POSEIDON2_FULL_ROUNDS;
+    let partial = vendored::POSEIDON2_PARTIAL_ROUNDS;
+    let partial_range = (full / 2)..(full / 2 + partial);
+    for round in 0..(full + partial) {
+        for (s, c) in state.iter_mut().zip(vendored::POSEIDON2_ARK[round].iter()) {
+            *s += afq_from_limbs(c);
+        }
+        if partial_range.contains(&round) {
+            state[0] = asbox17(state[0]);
+        } else {
+            for s in state.iter_mut() {
+                *s = asbox17(*s);
+            }
+        }
+        let mut new_state = [AFq::zero(); 3];
+        for (i, ns) in new_state.iter_mut().enumerate() {
+            for (m, s) in vendored::POSEIDON2_MDS[i].iter().zip(state.iter()) {
+                *ns += afq_from_limbs(m) * s;
+            }
+        }
+        *state = new_state;
+    }
+}
+
+fn poseidon4_perm_soft(state: &mut [AFq; 5]) {
+    let full = vendored4::POSEIDON4_FULL_ROUNDS;
+    let partial = vendored4::POSEIDON4_PARTIAL_ROUNDS;
+    let partial_range = (full / 2)..(full / 2 + partial);
+    for round in 0..(full + partial) {
+        for (s, c) in state.iter_mut().zip(vendored4::POSEIDON4_ARK[round].iter()) {
+            *s += afq_from_limbs(c);
+        }
+        if partial_range.contains(&round) {
+            state[0] = asbox17(state[0]);
+        } else {
+            for s in state.iter_mut() {
+                *s = asbox17(*s);
+            }
+        }
+        let mut new_state = [AFq::zero(); 5];
+        for (i, ns) in new_state.iter_mut().enumerate() {
+            for (m, s) in vendored4::POSEIDON4_MDS[i].iter().zip(state.iter()) {
+                *ns += afq_from_limbs(m) * s;
+            }
+        }
+        *state = new_state;
+    }
+}
+
+fn poseidon4_hash_soft(inputs: &[AFq]) -> AFq {
+    let mut state = [AFq::zero(); 5];
+    state[1] += afq_from_limbs(&vendored4::POSEIDON4_DOMAIN);
+    state[2] += AFq::from(inputs.len() as u64);
+    let mut chunks = inputs.chunks(4).peekable();
+    if chunks.peek().is_some() {
+        poseidon4_perm_soft(&mut state);
+        while let Some(chunk) = chunks.next() {
+            for (i, v) in chunk.iter().enumerate() {
+                state[1 + i] += v;
+            }
+            if chunks.peek().is_some() {
+                poseidon4_perm_soft(&mut state);
+            }
+        }
+    }
+    poseidon4_perm_soft(&mut state);
+    state[1]
+}
+
+fn afr_full(s: &mut u64) -> ark_ed_on_bls12_377::Fr {
+    let mut bytes = [0u8; 32];
+    for chunk in bytes.chunks_mut(8) {
+        chunk.copy_from_slice(&xorshift(s).to_le_bytes());
+    }
+    ark_ed_on_bls12_377::Fr::from_le_bytes_mod_order(&bytes)
+}
+
+fn afq_rand(s: &mut u64) -> AFq {
+    let mut limbs = [0u64; 4];
+    for limb in limbs.iter_mut() {
+        *limb = xorshift(s);
+    }
+    limbs[3] &= (1u64 << 58) - 1;
+    afq_from_limbs(&limbs)
+}
+
+fn merkle_verify_16_soft(leaf: AFq, s: &mut u64) -> AFq {
+    let mut node = poseidon4_hash_soft(&[leaf]);
+    for _ in 0..16 {
+        let sibling = afq_rand(s);
+        let bit = xorshift(s) & 1 == 1;
+        node = if bit {
+            poseidon4_hash_soft(&[sibling, node])
+        } else {
+            poseidon4_hash_soft(&[node, sibling])
+        };
+    }
+    node
+}
+
+#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 134217728)]
+fn usdcx_transfer_private_soft(seed: u64) -> u64 {
+    let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+    let g = AProj::generator();
+    let pk = g * afr_full(&mut s);
+    let addr_pt = g * afr_full(&mut s);
+    let nonce_pt = g * afr_full(&mut s);
+
+    let mut acc = AFq::zero();
+    let mut state = [AFq::from(seed), AFq::from(1u64), AFq::from(2u64)];
+
+    start_cycle_tracking("usdcx_soft_total");
+
+    let vk = afr_full(&mut s);
+    let shared = (nonce_pt * vk).into_affine();
+    state[0] += shared.x;
+    state[1] += shared.y;
+    for _ in 0..4 {
+        poseidon_perm_soft(&mut state);
+    }
+    acc += state[0];
+
+    for _ in 0..2 {
+        poseidon_perm_soft(&mut state);
+    }
+    let sn = (g * afr_full(&mut s)).into_affine();
+    acc += sn.x + state[0];
+
+    poseidon_perm_soft(&mut state);
+    let e = afr_full(&mut s);
+    let z = afr_full(&mut s);
+    let rp = (g * z + pk * e).into_affine();
+    acc += rp.x;
+
+    start_cycle_tracking("merkle_proofs_soft");
+    let root1 = merkle_verify_16_soft(afq_rand(&mut s), &mut s);
+    let root2 = merkle_verify_16_soft(afq_rand(&mut s), &mut s);
+    acc += root1 + root2;
+    end_cycle_tracking("merkle_proofs_soft");
+
+    for n_perms in [6usize, 6, 7] {
+        let esk = afr_full(&mut s);
+        let eph = (g * esk).into_affine();
+        let so = (addr_pt * esk).into_affine();
+        state[0] += eph.x;
+        state[1] += so.x;
+        for _ in 0..n_perms {
+            poseidon_perm_soft(&mut state);
+        }
+        acc += state[0] + eph.y;
+    }
+
+    end_cycle_tracking("usdcx_soft_total");
+
+    acc += state[1] + state[2];
+    acc.into_bigint().0[0]
+}
