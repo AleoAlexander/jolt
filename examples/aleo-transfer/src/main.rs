@@ -7,7 +7,7 @@ pub fn main() {
     let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
     let summary = guest::analyze_transfer_private(0xA1E0_0001_u64 as u64);
 
-    let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
+    let transfer_log = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
     let usdcx_summary = guest::analyze_usdcx_transfer_private(0xA1E0_0003_u64 as u64);
     println!("usdcx_transfer_private trace: {} cycles", usdcx_summary.trace_len());
     {
@@ -45,7 +45,7 @@ pub fn main() {
             FieldAccelParams, FieldAccelWitness, FieldOpRecord,
         };
         let params = FieldAccelParams { modulus_limbs: MODULUS };
-        let records: Vec<FieldOpRecord> = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log()
+        let records: Vec<FieldOpRecord> = transfer_log
             .iter()
             .map(|(x, y, z)| FieldOpRecord::new(*x, *y, *z, &params))
             .collect();
