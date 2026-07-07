@@ -10,7 +10,7 @@ performed yet.
 ## Setup
 
 Each record satisfies, over the integers, `x·y = w·q + z` with
-`x, y, z, w < 2^253`. Every 253-bit value is decomposed into three 86-bit
+`x, y, z < 2^253 and w < 2^254 (honest w can reach 254 bits: x·y/q < ~2^254)`. Every 253-bit value is decomposed into three 86-bit
 limbs (`limbs_86`), so each limb column entry is `< 2^86`; the modulus limbs
 `qL_i < 2^86` are public constants. Define the five product columns
 (`k = 0..4`, `m_k` = number of `(i, j)` pairs with `i + j = k`, `i, j < 3`,

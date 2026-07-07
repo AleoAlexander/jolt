@@ -38,10 +38,18 @@ Aleo→Jolt roadmap's Phase 0 existed to produce.
 3. **`jolt-inlines/edwards-bls12`** (M3/M4): FQMUL/FQSQR/FQDIV advice-quotient
    inlines with the w·p accumulation generalized to a 4-limb negated modulus;
    canonical-limb `Fq` SDK with add/sub/inverse; extended twisted-Edwards
-   (a=-1, d=3021) point add/double/neg/to_affine. 9 differential tests vs
-   arkworks (1000-case random + edge cases + 20-step chain agreement).
-   **Proven end-to-end**: `fqmul-test` traces, proves, and verifies
-   (`valid: true`, 2.92s) — the M3 soundness gate passed.
+   (a=-1, d=3021) point add/double/neg/to_affine.
+   **Precise soundness claim** (per the round-2 adversarial review): the
+   sequence proves `a·b ≡ c (mod q)` and `c < 2^256` — it does *not* by
+   itself prove canonical output. It admits ~14 non-canonical representatives
+   per product (`2^256/q ≈ 13.7`); canonical field output is enforced by the
+   guest-side `is_fq_non_canonical` → `spoil_proof` check after each op (both
+   verified sound), not by the sequence. The 9 differential tests run on the
+   `host` build, which uses the *arkworks* `Fq` fallback, so they validate the
+   SDK/point formulas but do **not** exercise the inline sequence constraints;
+   the sequence itself has only completeness validation (`fqmul-test`
+   `valid: true`, 2.92s) — no negative/soundness tests yet. "M3 gate" =
+   end-to-end completeness, not a soundness gate.
 4. **Scorecard harness** (`scripts/aleo-scorecard.sh`) + `RESULTS.md` history.
 
 ## The negative results, precisely

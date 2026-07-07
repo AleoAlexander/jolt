@@ -114,10 +114,12 @@ Poseidon hashing.
 ## usdcx-soft-direct — 2026-07-07 — software baseline measured (same binary)
 ```
 usdcx_transfer_private (software, ark):   84,354,251 cycles  (merkle: 61,621,175)
-usdcx_transfer_private (advice-backed):   14,558,905 cycles  (merkle:  8,962,739)
-field acceleration factor:                5.8x   (merkle component: 6.9x)
+usdcx_transfer_private (advice-backed):   14,558,905 cycles  (merkle: 10,255,691)
+field acceleration factor:                5.8x   (merkle component: 6.0x)
 ```
-Note: adding the ark software twin to the guest binary shifted the SDK-path
+Note: the advice merkle figure 10,255,691 is from THIS binary (the earlier
+usdcx-model block's 8,962,739 was a different, pre-twin build — do not mix).
+Adding the ark software twin to the guest binary shifted the SDK-path
 total from 12.93M to 14.56M (codegen/inlining differences only — virtual
 instruction count identical); the 5.8x compares both paths in one binary.
 The earlier 3.4x "linear floor" estimate was too conservative: real software

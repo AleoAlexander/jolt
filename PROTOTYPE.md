@@ -25,10 +25,38 @@
    the real design needs an in-gadget divisor-nonzero witness.
 8. num_records/log_n are trusted inputs, not transcript-bound.
 
-An internal adversarial review (July 2026) confirmed the arithmetization and
-carry bounds are sound (|S_k| < 2^175, ~79 bits of margin) and produced the
-soundness-requirements list now in the RFC; items 1-8 above are the
-prototype-side manifestations.
+## Known implementation gaps (round-2 code review, July 2026)
+Distinct from the protocol-design requirements above — these are code-level:
+- **from_canonical uses debug_assert** (sdk.rs): compiled out in release, so
+  non-canonical operands are accepted at the input boundary. Load-bearing
+  because Fq derives Eq on raw limbs and add()/the overflow argument assume
+  < q. Real (small) soundness crack in release; fix = reduce or spoil_proof
+  instead of debug_assert. Present at phase0-complete and HEAD.
+- **load_fq ...unwrap_or(0)** (sequence_builder.rs HEAD): an unmapped/failed
+  memory load silently becomes limb 0, corrupting the logged record. Harmless
+  in B0 (unbound); a latent desync once B1 binds the log to the trace.
+- **add() debug_assert!(!carry)** (sdk.rs): drops carry-out in release;
+  reachable only via non-canonical inputs (same root as from_canonical).
+- **FIELD_OP_LOG thread-local**: correct single-pass for the published
+  RESULTS.md counts (verified: usdcx/credits = 3.19× matches the 3.2× op
+  ratio; no double-count), but drain-ordering is fragile and a future
+  worker-thread tracer would silently under-log. Fix = thread the log through
+  ProgramSummary, not a thread_local!.
+- **FieldOpRecord::new panics** on malformed logs (assert/expect): fine for an
+  honest tracer, a DoS vector for any service building witnesses from
+  untrusted logs. Fix = return Result before service use.
+- **scalar_mul branches on scalar bits**: leaks Hamming weight / bit-length via
+  trace shape. Fine for public scalars; the "branches cost cycles, not privacy"
+  comment is an assumption, not a fact, for secret scalars.
+
+Cleared by the review (checked, not exploitable): carry-counter overflow, the
+tail LTE-after-ADD wrap checks, spoil_proof unsatisfiability, and the
+guest canonicity comparison — all sound.
+
+An internal adversarial review (July 2026, two rounds) confirmed the
+arithmetization and carry bounds are sound (|S_k| < 2^175, ~79 bits of margin)
+and produced the soundness-requirements list now in the RFC; items 1-8 above
+are the prototype-side design manifestations, the list here is the code-side.
 
 ## Reproduce
 `export CARGO_PROFILE_RELEASE_LTO=off; cargo build --release --bin jolt`
