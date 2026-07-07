@@ -40,6 +40,27 @@ fn load_fq(cpu: &mut Cpu, addr: u64) -> Fq {
     Fq::new(BigInt(limbs))
 }
 
+// PROTOTYPE: host-side invocation log. Records are normalized to the
+// verified identity shape x*y = w*q + z (Mul: (a,b,c); Square: (a,a,c);
+// Div: (c,b,a)); the quotient w is re-derived by the consumer. Drained by
+// the prover host via `take_field_op_log()`.
+std::thread_local! {
+    static FIELD_OP_LOG: std::cell::RefCell<Vec<([u64; 4], [u64; 4], [u64; 4])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Drain the (x, y, z) invocation log accumulated since the last call.
+pub fn take_field_op_log() -> Vec<([u64; 4], [u64; 4], [u64; 4])> {
+    FIELD_OP_LOG.with(|log| std::mem::take(&mut *log.borrow_mut()))
+}
+
+fn log_record(x: Fq, y: Fq, z: Fq) {
+    FIELD_OP_LOG.with(|log| {
+        log.borrow_mut()
+            .push((x.into_bigint().0, y.into_bigint().0, z.into_bigint().0));
+    });
+}
+
 /// Advice-store-only sequence: 4 doublewords of result written to rs3.
 fn advice_only_sequence(
     mut asm: InlineExpansionBuilder,
@@ -58,7 +79,7 @@ fn result_advice(c: Fq) -> FieldElementAdvice {
 }
 
 macro_rules! edbls_advice_op {
-    ($name:ident, funct3: $funct3:expr, name: $op_name:expr, compute: $compute:expr) => {
+    ($name:ident, funct3: $funct3:expr, name: $op_name:expr, compute: $compute:expr, normalize: $normalize:expr) => {
         pub struct $name;
         impl InlineOp for $name {
             type Advice = FieldElementAdvice;
@@ -75,21 +96,28 @@ macro_rules! edbls_advice_op {
             }
             fn build_advice(operands: FormatInline, cpu: &mut Cpu) -> Self::Advice {
                 let compute: fn(Fq, Fq) -> Fq = $compute;
+                let normalize: fn(Fq, Fq, Fq) -> (Fq, Fq, Fq) = $normalize;
                 let a = load_fq(cpu, cpu.x[operands.rs1 as usize] as u64);
                 let b = load_fq(cpu, cpu.x[operands.rs2 as usize] as u64);
-                result_advice(compute(a, b))
+                let c = compute(a, b);
+                let (x, y, z) = normalize(a, b, c);
+                log_record(x, y, z);
+                result_advice(c)
             }
         }
     };
 }
 
 edbls_advice_op!(EdBlsMulQ, funct3: crate::EDBLS_MULQ_FUNCT3, name: crate::EDBLS_MULQ_NAME,
-    compute: |a, b| a * b);
+    compute: |a, b| a * b,
+    normalize: |a, b, c| (a, b, c));
 edbls_advice_op!(EdBlsSquareQ, funct3: crate::EDBLS_SQUAREQ_FUNCT3, name: crate::EDBLS_SQUAREQ_NAME,
-    compute: |a, _b| a.square());
+    compute: |a, _b| a.square(),
+    normalize: |a, _b, c| (a, a, c));
 edbls_advice_op!(EdBlsDivQ, funct3: crate::EDBLS_DIVQ_FUNCT3, name: crate::EDBLS_DIVQ_NAME,
     compute: |a, b| {
         a * b
             .inverse()
             .expect("Attempted to divide by zero in edwards-bls12 base field")
-    });
+    },
+    normalize: |a, b, c| (c, b, a));
