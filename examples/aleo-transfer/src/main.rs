@@ -64,6 +64,9 @@ pub fn main() {
         );
     }
 
+    let soft = guest::analyze_usdcx_transfer_private_soft(0xA1E0_0003_u64 as u64);
+    println!("usdcx_transfer_private_soft trace: {} cycles", soft.trace_len());
+
     println!("\n=== aleo-transfer trace summary ===");
     println!("total trace length (cycles): {}", summary.trace_len());
     println!("\ntop instructions:");

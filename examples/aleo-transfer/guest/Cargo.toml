@@ -10,6 +10,9 @@ field-inline = ["jolt/field-inline"]
 [dependencies]
 jolt = { package = "jolt-sdk", path = "../../../jolt-sdk" }
 jolt-inlines-edwards-bls12.workspace = true
+ark-ed-on-bls12-377 = { version = "0.5.0", default-features = false }
+ark-ec = { version = "0.5.0", default-features = false }
+ark-ff = { version = "0.5.0", default-features = false }
 
 [lib]
 test = false
