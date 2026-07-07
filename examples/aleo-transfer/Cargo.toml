@@ -9,6 +9,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 guest = { package = "aleo-transfer-guest", path = "./guest" }
 jolt-inlines-edwards-bls12 = { workspace = true, features = ["host"] }
+jolt-prover-legacy = { workspace = true, features = ["host", "field-accel-prototype"] }
 
 [dev-dependencies]
 serde_json = "1"

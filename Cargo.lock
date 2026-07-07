@@ -298,6 +298,7 @@ dependencies = [
  "ark-ed-on-bls12-377",
  "ark-ff 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "jolt-inlines-edwards-bls12",
+ "jolt-prover-legacy",
  "jolt-sdk",
  "serde_json",
  "tracing",

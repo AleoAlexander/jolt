@@ -79,3 +79,17 @@ a batched-check or trusted-advice design cuts this; (b) scalar mult is plain
 double-and-add (~375 point ops); a 4-bit window removes ~90 adds/mult. Both
 are Track C design choices, not prototype blockers. mult_bench proof: 306K
 cycles, 2.99s prove, 1.75GB RSS (was 5.3GB), 85.9KB proof, 74ms verify.
+## B1-gadget — 2026-07-07 — field-accel prototype complete
+```
+transfer_private trace:        3,086,619 cycles (B0, unchanged)
+field-accel invocation log:    46,056 records
+gadget sumcheck prove:         0.179 s
+gadget sumcheck verify:        <0.1 ms
+mult_bench main proof:         2.99 s / 85,905 B / 73 ms verify / 1.75 GB RSS
+```
+**B1 summary:** the verification work removed from the trace (46K ops x ~269
+cycles = ~12.4M cycles = ~2 minutes of proving at measured throughput) is
+performed by one batched sumcheck in 0.179 s — a ~700x reduction for the
+verification portion, at ~4 microseconds per field op. Final evals are clear
+(unbound); PCS binding, range checks (CARRY_BOUNDS.md), and BlindFold sync
+are Track C. Tamper tests confirm the gadget rejects corrupted logs.
