@@ -350,3 +350,29 @@ impl EdwardsPoint {
         )
     }
 }
+
+impl EdwardsPoint {
+    /// Plain MSB-first double-and-add over the unified `add`. Windowing is
+    /// deliberately omitted: at ~40-cycle field ops the prototype doesn't need
+    /// it, and branches cost cycles, not privacy, here.
+    pub fn scalar_mul(&self, scalar: &[u64; 4]) -> EdwardsPoint {
+        let mut acc = EdwardsPoint::IDENTITY;
+        let mut started = false;
+        for limb_idx in (0..4).rev() {
+            for bit_idx in (0..64).rev() {
+                if started {
+                    acc = acc.double();
+                }
+                if (scalar[limb_idx] >> bit_idx) & 1 == 1 {
+                    if started {
+                        acc = acc.add(self);
+                    } else {
+                        acc = *self;
+                        started = true;
+                    }
+                }
+            }
+        }
+        acc
+    }
+}

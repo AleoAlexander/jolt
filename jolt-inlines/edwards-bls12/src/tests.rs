@@ -156,3 +156,24 @@ fn point_edge_cases() {
         "2O"
     );
 }
+
+#[test]
+fn scalar_mul_matches_arkworks() {
+    let mut rng = ark_std::test_rng();
+    let g = EdwardsPoint::generator();
+    for _ in 0..50 {
+        let s = ark_ed_on_bls12_377::Fr::rand(&mut rng);
+        let ours = g.scalar_mul(&s.into_bigint().0);
+        let theirs = (ArkP::generator() * s).into_affine();
+        assert_eq!(
+            ours.to_affine(),
+            (theirs.x.into_bigint().0, theirs.y.into_bigint().0)
+        );
+    }
+    // edge cases: 0*G == identity, 1*G == G
+    assert_eq!(
+        g.scalar_mul(&[0, 0, 0, 0]).to_affine(),
+        ([0u64; 4], [1u64, 0, 0, 0])
+    );
+    assert_point_eq(&g.scalar_mul(&[1, 0, 0, 0]), &ArkP::generator(), "1*G");
+}

@@ -53,15 +53,14 @@ pub fn main() {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use ark_ed_on_bls12_377::Fq;
-    use ark_ff::{PrimeField, Zero};
+    use jolt_inlines_edwards_bls12::sdk::Fq;
 
     fn fq_from_dec(s: &str) -> Fq {
-        let mut acc = Fq::zero();
-        let ten = Fq::from(10u64);
+        let ten = Fq::from_u64(10);
+        let mut acc = Fq::ZERO;
         for b in s.bytes() {
             assert!(b.is_ascii_digit(), "non-digit in field literal");
-            acc = acc * ten + Fq::from(u64::from(b - b'0'));
+            acc = acc.mul(&ten).add(&Fq::from_u64(u64::from(b - b'0')));
         }
         acc
     }
@@ -100,7 +99,7 @@ mod tests {
                 ins.len() == 1 && ins[0].as_str().unwrap() == "12345"
             })
             .unwrap();
-        let expected = fq_from_dec(case["output"].as_str().unwrap()).into_bigint().0;
+        let expected = fq_from_dec(case["output"].as_str().unwrap()).to_canonical();
         assert_eq!(out, expected);
     }
 }
