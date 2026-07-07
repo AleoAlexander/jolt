@@ -194,13 +194,16 @@ fn transfer_private(seed: u64) -> u64 {
 
 // --- usdcx_stablecoin.aleo transfer_private model ---------------------------
 //
-// Modeled from the on-chain program source (fetched 2026-07-08): consumes one
+// Modeled from the on-chain program source (fetched 2026-07-07): consumes one
 // Token record, verifies TWO 16-level Merkle proofs in-circuit via hash.psd4
 // (Poseidon rate 4, t = 5), and produces THREE records (two Token + one
 // ComplianceRecord with 4 fields). Same modeling fidelity as transfer_private:
 // faithful op counts and real snarkVM parameters, approximated structure.
 
 mod vendored4;
+
+const _: () = assert!(vendored4::POSEIDON4_ALPHA == 17, "sbox17_5 hardcodes alpha = 17");
+const _: () = assert!(vendored4::POSEIDON4_T == 5, "state layout hardcodes t = 5");
 
 fn sbox17_5(x: Fq) -> Fq {
     x.square().square().square().square().mul(&x)

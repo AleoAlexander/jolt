@@ -18,6 +18,17 @@
    CARRY_BOUNDS.md; enforcement is Track C).
 4. Invocation log via host thread-local, not witness-gen plumbing.
 5. Non-ZK mode only; no BlindFold synchronization; no Akita path.
+6. Transcript draws tau/alpha before any column commitment is absorbed —
+   grindable in a bound design; the real design must absorb commitments
+   (and the record count) first.
+7. Division records: the b = 0, a = 0 cell accepts an arbitrary quotient;
+   the real design needs an in-gadget divisor-nonzero witness.
+8. num_records/log_n are trusted inputs, not transcript-bound.
+
+An internal adversarial review (July 2026) confirmed the arithmetization and
+carry bounds are sound (|S_k| < 2^175, ~79 bits of margin) and produced the
+soundness-requirements list now in the RFC; items 1-8 above are the
+prototype-side manifestations.
 
 ## Reproduce
 `export CARGO_PROFILE_RELEASE_LTO=off; cargo build --release --bin jolt`
