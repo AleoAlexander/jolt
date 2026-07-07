@@ -3,7 +3,37 @@ pub fn main() {
         .with_max_level(tracing::Level::INFO)
         .init();
 
+    // drain any log noise from prior compiles, then trace the transfer
+    let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
     let summary = guest::analyze_transfer_private(0xA1E0_0001_u64 as u64);
+
+    // B1 gadget cost at transfer scale: prove the invocation log of the trace
+    {
+        use jolt_inlines_edwards_bls12::sdk::MODULUS;
+        use jolt_prover_legacy::transcripts::{Blake2bTranscript, Transcript};
+        use jolt_prover_legacy::zkvm::field_accel::{
+            sumcheck::{prove_field_accel, verify_field_accel},
+            FieldAccelParams, FieldAccelWitness, FieldOpRecord,
+        };
+        let params = FieldAccelParams { modulus_limbs: MODULUS };
+        let records: Vec<FieldOpRecord> = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log()
+            .iter()
+            .map(|(x, y, z)| FieldOpRecord::new(*x, *y, *z, &params))
+            .collect();
+        let witness = FieldAccelWitness::from_records(&records, &params);
+        let log_n = witness.padded_len().trailing_zeros() as usize;
+        let t = std::time::Instant::now();
+        let gadget_proof = prove_field_accel::<jolt_sdk::F, _>(
+            &witness, &params, &mut Blake2bTranscript::new(b"field_accel"));
+        let prove_s = t.elapsed().as_secs_f64();
+        let t = std::time::Instant::now();
+        verify_field_accel(&gadget_proof, &params, log_n, &mut Blake2bTranscript::new(b"field_accel"))
+            .expect("transfer-scale gadget proof failed");
+        println!(
+            "field-accel gadget (transfer scale): {} records, prove {:.3}s, verify {:.4}s",
+            records.len(), prove_s, t.elapsed().as_secs_f64()
+        );
+    }
 
     println!("\n=== aleo-transfer trace summary ===");
     println!("total trace length (cycles): {}", summary.trace_len());
