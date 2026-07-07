@@ -10,6 +10,11 @@
 //! PROTOTYPE: records are collected by the host example (thread-local log in
 //! the inline crate) rather than plumbed through witness generation.
 
+/// B1 batched verification sumcheck. Gated so the (unfinished) prototype
+/// surface is opt-in for consumers, but always compiled for tests.
+#[cfg(any(test, feature = "field-accel-prototype"))]
+pub mod sumcheck;
+
 use num_bigint::BigUint;
 
 /// Guest-declared modulus. Not hardcoded to any curve.
@@ -166,7 +171,12 @@ impl FieldAccelWitness {
             carries: Default::default(),
             num_records: records.len(),
         };
-        for cols in [&mut w.x_limbs, &mut w.y_limbs, &mut w.z_limbs, &mut w.w_limbs] {
+        for cols in [
+            &mut w.x_limbs,
+            &mut w.y_limbs,
+            &mut w.z_limbs,
+            &mut w.w_limbs,
+        ] {
             for col in cols.iter_mut() {
                 col.reserve(n);
             }
@@ -208,7 +218,6 @@ impl FieldAccelWitness {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
