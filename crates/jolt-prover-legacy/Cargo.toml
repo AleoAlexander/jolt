@@ -24,6 +24,8 @@ keywords = ["SNARK", "cryptography", "proofs", "zkVM"]
 
 [features]
 default = ["host"]
+# B1 field-acceleration prototype: standalone batched sumcheck (zkvm/field_accel/sumcheck.rs)
+field-accel-prototype = []
 zk = ["dory/zk", "dep:jolt-blindfold", "jolt-verifier/zk"]
 host = ["prover", "dep:jolt-inlines-sha2", "dep:jolt-inlines-keccak256"]
 prover = [
