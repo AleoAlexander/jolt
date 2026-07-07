@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 jolt-sdk = { workspace = true, features = ["host"] }
 jolt-inlines-edwards-bls12 = { workspace = true, features = ["host"] }
+jolt-prover-legacy = { workspace = true, features = ["host", "field-accel-prototype"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 guest = { package = "fqmul-test-guest", path = "./guest" }

@@ -2703,6 +2703,7 @@ version = "0.1.0"
 dependencies = [
  "fqmul-test-guest",
  "jolt-inlines-edwards-bls12",
+ "jolt-prover-legacy",
  "jolt-sdk",
  "tracing",
  "tracing-subscriber",
