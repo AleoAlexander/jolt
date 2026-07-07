@@ -123,3 +123,38 @@ instruction count identical); the 5.8x compares both paths in one binary.
 The earlier 3.4x "linear floor" estimate was too conservative: real software
 carries per-constant Montgomery conversions the per-op model misses. Measured
 factor matches the credits transfer's 5.7x almost exactly.
+## advice-chain primary record — 2026-07-07 (fqmul-test, branch HEAD)
+```
+fqmul_chain (advice-backed): 41,964 cycles / 1000 field ops = 41 cycles/op
+ark_chain (software):       252,714 cycles / 1000 field ops = 252 cycles/op
+```
+Primary measurement backing the 41 cyc/op figure quoted in B0 analysis and
+the RFC (previously only recorded in fqmul-test output, not here).
+
+## B0-staleness-recheck-HEAD — 2026-07-07 — d10a58ce
+```
+"record_decrypt": 479468 RV64IMAC cycles + 44560 virtual instructions = 524028 total cycles
+"serial_number": 359810 RV64IMAC cycles + 35440 virtual instructions = 395250 total cycles
+"schnorr_verify": 504485 RV64IMAC cycles + 54152 virtual instructions = 558637 total cycles
+"output_record_1": 847413 RV64IMAC cycles + 80752 virtual instructions = 928165 total cycles
+"output_record_2": 846689 RV64IMAC cycles + 80896 virtual instructions = 927585 total cycles
+"transfer_total": 3037895 RV64IMAC cycles + 295800 virtual instructions = 3333695 total cycles
+"record_decrypt": 481987 RV64IMAC cycles + 44960 virtual instructions = 526947 total cycles
+"serial_number": 354929 RV64IMAC cycles + 34936 virtual instructions = 389865 total cycles
+"schnorr_verify": 522072 RV64IMAC cycles + 55640 virtual instructions = 577712 total cycles
+"merkle_proofs": 9532139 RV64IMAC cycles + 723552 virtual instructions = 10255691 total cycles
+"output_token_1": 822816 RV64IMAC cycles + 78160 virtual instructions = 900976 total cycles
+"output_token_2": 835093 RV64IMAC cycles + 79488 virtual instructions = 914581 total cycles
+"output_compliance": 907543 RV64IMAC cycles + 85488 virtual instructions = 993031 total cycles
+"usdcx_total": 13456681 RV64IMAC cycles + 1102224 virtual instructions = 14558905 total cycles
+"merkle_proofs_soft": 60425261 RV64IMAC cycles + 1195914 virtual instructions = 61621175 total cycles
+"usdcx_soft_total": 82837104 RV64IMAC cycles + 1517147 virtual instructions = 84354251 total cycles
+total trace length (cycles): 4095497
+trace length (cycles): 318873
+2026-07-07T19:06:16.649400Z  INFO jolt_prover_legacy::zkvm::prover: 288621 raw RISC-V instructions + 30252 virtual instructions = 318873 total cycles
+prover time: 3.16s  (100898 cycles/s)
+proof size: 85905 bytes
+verify time: 0.074s, valid: true
+4497948672  maximum resident set size
+```
+
