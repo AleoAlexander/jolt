@@ -3753,6 +3753,7 @@ dependencies = [
  "light-poseidon",
  "memory-stats",
  "num",
+ "num-bigint",
  "num-derive 0.5.1",
  "num-traits",
  "postcard",
