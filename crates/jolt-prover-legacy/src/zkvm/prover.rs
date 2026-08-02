@@ -535,6 +535,13 @@ impl<
         let opening_claims = crate::zkvm::proof_parts::ProverOpeningClaims(
             self.opening_accumulator.openings.clone(),
         );
+        // Kishu claim-graph sizing: count of opening claims a real proof carries
+        // (drives the O(d·#claims) terminal-statement estimate in the Kishu paper).
+        #[cfg(not(feature = "zk"))]
+        eprintln!(
+            "kishu-instrumentation: opening claim count = {}",
+            self.opening_accumulator.openings.len()
+        );
 
         #[cfg(test)]
         {
