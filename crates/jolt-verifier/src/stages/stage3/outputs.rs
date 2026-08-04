@@ -181,6 +181,24 @@ mod tests {
         );
     }
 
+    /// Every declared alias pair denotes the same underlying polynomial —
+    /// only the relation attribution differs. Mechanizes the semantic leg of
+    /// the alias value-preservation argument, which the trait contract states
+    /// but the type system does not enforce.
+    #[test]
+    fn aliased_pairs_share_polynomial_id() {
+        for (aliased, source) in InstructionInput::<Fr>::aliased_output_openings()
+            .into_iter()
+            .chain(RegistersClaimReduction::<Fr>::aliased_output_openings())
+        {
+            assert_eq!(
+                aliased.polynomial_id(),
+                source.polynomial_id(),
+                "alias pair ({aliased:?}, {source:?}) must share a polynomial id",
+            );
+        }
+    }
+
     /// Pins the stage's alias declarations: each aliased id is distinct and
     /// referenced by its declaring member's own output `Expr` (so the batch fold
     /// constrains the wire cell), and each canonical source is absorbed by its
