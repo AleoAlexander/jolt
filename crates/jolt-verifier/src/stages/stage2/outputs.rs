@@ -322,6 +322,21 @@ mod tests {
     }
 
     /// Pins the reduction's alias declarations: each aliased id is distinct and
+    /// Every declared alias pair denotes the same underlying polynomial —
+    /// only the relation attribution differs. Mechanizes the semantic leg of
+    /// the alias value-preservation argument, which the trait contract states
+    /// but the type system does not enforce.
+    #[test]
+    fn aliased_pairs_share_polynomial_id() {
+        for (aliased, source) in InstructionClaimReduction::<Fr>::aliased_output_openings() {
+            assert_eq!(
+                aliased.polynomial_id(),
+                source.polynomial_id(),
+                "alias pair ({aliased:?}, {source:?}) must share a polynomial id",
+            );
+        }
+    }
+
     /// referenced by the reduction's own output `Expr` (so the batch fold
     /// constrains the wire cell), and each canonical source is absorbed by the
     /// product remainder (so the value the copy is checked against is
