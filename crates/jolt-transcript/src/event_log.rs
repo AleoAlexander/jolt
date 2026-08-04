@@ -44,7 +44,10 @@ pub(crate) fn next_instance() -> u64 {
 }
 
 /// Records one transcript event. No-op unless `KISHU_EVENT_LOG` is set.
-pub(crate) fn record(instance: u64, kind: &str, payload: &[u8]) {
+/// `payload_digest` is a collision-resistant digest of the FULL payload
+/// (computed by the caller with its own hash type), so stream-symmetry
+/// comparisons establish byte identity, not 64-byte-prefix equality.
+pub(crate) fn record(instance: u64, kind: &str, payload: &[u8], payload_digest: &[u8]) {
     let Some(file) = log_file() else { return };
     let seq = SEQ_COUNTER.fetch_add(1, Ordering::Relaxed);
     let caller = caller_frame();
@@ -53,8 +56,12 @@ pub(crate) fn record(instance: u64, kind: &str, payload: &[u8]) {
     for byte in &payload[..prefix_len] {
         let _ = write!(hex, "{byte:02x}");
     }
+    let mut digest_hex = String::with_capacity(payload_digest.len() * 2);
+    for byte in payload_digest {
+        let _ = write!(digest_hex, "{byte:02x}");
+    }
     let line = format!(
-        "{{\"seq\":{seq},\"inst\":{instance},\"kind\":\"{kind}\",\"len\":{},\"data\":\"{hex}\",\"caller\":\"{}\"}}\n",
+        "{{\"seq\":{seq},\"inst\":{instance},\"kind\":\"{kind}\",\"len\":{},\"data\":\"{hex}\",\"digest\":\"{digest_hex}\",\"caller\":\"{}\"}}\n",
         payload.len(),
         caller.replace('\\', "/").replace('"', "'"),
     );
