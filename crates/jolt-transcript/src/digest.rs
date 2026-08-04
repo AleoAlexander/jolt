@@ -25,6 +25,8 @@ struct TestState {
 pub struct DigestTranscript<D: Digest<OutputSize = U32> + 'static, F> {
     state: [u8; 32],
     n_rounds: u32,
+    /// Event-log instance id; 0 and unread unless `KISHU_EVENT_LOG` is set.
+    instance: u64,
     #[cfg(test)]
     test_state: TestState,
     _marker: std::marker::PhantomData<(fn() -> D, F)>,
@@ -39,6 +41,7 @@ where
         Self {
             state: self.state,
             n_rounds: self.n_rounds,
+            instance: self.instance,
             #[cfg(test)]
             test_state: self.test_state.clone(),
             _marker: std::marker::PhantomData,
@@ -86,6 +89,7 @@ where
     #[doc(hidden)]
     pub fn raw_challenge_bytes(&mut self, out: &mut [u8]) {
         self.challenge_bytes(out);
+        crate::event_log::record(self.instance, "raw_challenge", out);
     }
 
     #[inline]
@@ -155,9 +159,13 @@ where
 
         let hash: [u8; 32] = D::new().chain_update(padded).finalize().into();
 
+        let instance = crate::event_log::next_instance();
+        crate::event_log::record(instance, "new", label);
+
         Self {
             state: hash,
             n_rounds: 0,
+            instance,
             #[cfg(test)]
             test_state: TestState {
                 state_history: vec![hash],
@@ -168,6 +176,7 @@ where
     }
 
     fn append_bytes(&mut self, bytes: &[u8]) {
+        crate::event_log::record(self.instance, "absorb", bytes);
         let hash: [u8; 32] = self.hasher().chain_update(bytes).finalize().into();
         self.update_state(hash);
     }
@@ -175,12 +184,14 @@ where
     fn challenge(&mut self) -> F {
         let mut buf = [0u8; 16];
         self.challenge_bytes(&mut buf);
+        crate::event_log::record(self.instance, "challenge", &buf);
         F::from_challenge_bytes(&buf)
     }
 
     fn challenge_scalar(&mut self) -> F {
         let mut buf = [0u8; 16];
         self.challenge_bytes(&mut buf);
+        crate::event_log::record(self.instance, "challenge_scalar", &buf);
         F::from_scalar_challenge_bytes(&buf)
     }
 
