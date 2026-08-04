@@ -34,6 +34,7 @@
 
 mod codec;
 mod digest;
+mod event_log;
 mod legacy;
 #[cfg(feature = "transcript-poseidon")]
 mod poseidon;
