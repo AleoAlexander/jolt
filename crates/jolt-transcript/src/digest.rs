@@ -89,7 +89,12 @@ where
     #[doc(hidden)]
     pub fn raw_challenge_bytes(&mut self, out: &mut [u8]) {
         self.challenge_bytes(out);
-        crate::event_log::record(self.instance, "raw_challenge", out);
+        crate::event_log::record(
+            self.instance,
+            "raw_challenge",
+            out,
+            &D::digest(&*out)[..],
+        );
     }
 
     #[inline]
@@ -160,7 +165,7 @@ where
         let hash: [u8; 32] = D::new().chain_update(padded).finalize().into();
 
         let instance = crate::event_log::next_instance();
-        crate::event_log::record(instance, "new", label);
+        crate::event_log::record(instance, "new", label, &D::digest(label)[..]);
 
         Self {
             state: hash,
@@ -176,7 +181,7 @@ where
     }
 
     fn append_bytes(&mut self, bytes: &[u8]) {
-        crate::event_log::record(self.instance, "absorb", bytes);
+        crate::event_log::record(self.instance, "absorb", bytes, &D::digest(bytes)[..]);
         let hash: [u8; 32] = self.hasher().chain_update(bytes).finalize().into();
         self.update_state(hash);
     }
@@ -184,14 +189,14 @@ where
     fn challenge(&mut self) -> F {
         let mut buf = [0u8; 16];
         self.challenge_bytes(&mut buf);
-        crate::event_log::record(self.instance, "challenge", &buf);
+        crate::event_log::record(self.instance, "challenge", &buf, &D::digest(buf)[..]);
         F::from_challenge_bytes(&buf)
     }
 
     fn challenge_scalar(&mut self) -> F {
         let mut buf = [0u8; 16];
         self.challenge_bytes(&mut buf);
-        crate::event_log::record(self.instance, "challenge_scalar", &buf);
+        crate::event_log::record(self.instance, "challenge_scalar", &buf, &D::digest(buf)[..]);
         F::from_scalar_challenge_bytes(&buf)
     }
 
