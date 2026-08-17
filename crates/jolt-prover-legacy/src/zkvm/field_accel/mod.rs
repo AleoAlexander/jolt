@@ -1,17 +1,16 @@
 //! PROTOTYPE (branch aleo/field-accel-prototype): foreign-field acceleration
-//! witness — the invocation log and its 86-bit-limb decomposition.
+//! witness — the invocation log in the B2 64-bit word schema.
 //!
 //! Every advice-backed field op contributes one record satisfying
 //! `x * y = w * q + z` over the integers (Mul: (a,b,c); Square: (a,a,c);
-//! Div normalizes to (c,b,a)). The B1 batched sumcheck (sumcheck.rs) proves
-//! all records at once via the per-column limb equation; see CARRY_BOUNDS.md
-//! for the soundness bounds that B2 range checks must enforce.
-//!
-//! PROTOTYPE: records are collected by the host example (thread-local log in
-//! the inline crate) rather than plumbed through witness generation.
+//! Div normalizes to (c,b,a)). The identity is checked directly over the
+//! four 64-bit words of each value — the same words that sit in the
+//! committed untrusted-advice region as the record's 16-word block — via
+//! seven product columns and six committed offset carries, with 2-bit-digit
+//! range checks on the carries (sumcheck.rs). See CARRY_BOUNDS.md.
 
-/// B1 batched verification sumcheck. Gated so the (unfinished) prototype
-/// surface is opt-in for consumers, but always compiled for tests.
+/// B2 batched verification sumcheck. Gated so the prototype surface is
+/// opt-in for consumers, but always compiled for tests.
 #[cfg(any(test, feature = "field-accel-prototype"))]
 pub mod sumcheck;
 
@@ -27,15 +26,10 @@ impl FieldAccelParams {
     pub fn modulus(&self) -> BigUint {
         limbs_to_biguint(&self.modulus_limbs)
     }
-
-    /// Modulus as three 86-bit limbs (public inputs of the gadget).
-    pub fn modulus_limbs_86(&self) -> [u128; 3] {
-        limbs_86(&self.modulus_limbs)
-    }
 }
 
 /// One field-op invocation, normalized so the verified identity is always
-/// `x * y = w * q + z` with x, y, z, w < 2^253.
+/// `x * y = w * q + z` over the integers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FieldOpRecord {
     pub x: [u64; 4],
@@ -47,7 +41,7 @@ pub struct FieldOpRecord {
 impl FieldOpRecord {
     /// Build a record from (x, y, z) with x*y ≡ z (mod q); derives w.
     /// Panics if the identity does not hold exactly (prototype: the tracer
-    /// is honest; the sumcheck is what catches dishonest logs).
+    /// is honest; the gadget is what catches dishonest logs).
     pub fn new(x: [u64; 4], y: [u64; 4], z: [u64; 4], params: &FieldAccelParams) -> Self {
         let q = params.modulus();
         let product = limbs_to_biguint(&x) * limbs_to_biguint(&y);
@@ -88,57 +82,53 @@ fn biguint_to_limbs(v: &BigUint) -> [u64; 4] {
     limbs
 }
 
-/// Decompose a 256-bit little-endian limb value into three 86-bit limbs
-/// (86 + 86 + 84 bits of capacity; inputs are < 2^253).
-pub fn limbs_86(x: &[u64; 4]) -> [u128; 3] {
-    const MASK_86: u128 = (1u128 << 86) - 1;
-    let lo = x[0] as u128 | ((x[1] as u128) << 64); // bits 0..128
-    let hi = x[2] as u128 | ((x[3] as u128) << 64); // bits 128..256
-    let l0 = lo & MASK_86;
-    let l1 = ((lo >> 86) | (hi << 42)) & MASK_86; // bits 86..172
-    let l2 = hi >> 44; // bits 172..256
-    [l0, l1, l2]
-}
+/// Number of 64-bit product columns: words i + j = k for i, j in 0..4.
+pub const NUM_PRODUCT_COLUMNS: usize = 7;
+/// Number of carry columns (no carry out of the last column).
+pub const NUM_CARRIES: usize = 6;
+/// Carries are committed with this offset so the committed value is
+/// non-negative: carry' = carry + CARRY_OFFSET. |carry| < 2^67.2 (see
+/// CARRY_BOUNDS.md), so carry' < 2^69 fits DIGITS_PER_CARRY 2-bit digits.
+pub const CARRY_OFFSET: i128 = 1 << 68;
+/// 2-bit digits per committed carry (70 bits ≥ the 69-bit bound).
+pub const DIGITS_PER_CARRY: usize = 35;
+/// Total committed digit columns.
+pub const NUM_DIGIT_COLUMNS: usize = NUM_CARRIES * DIGITS_PER_CARRY;
 
-/// Recompose (test helper / documentation of the layout).
-pub fn recompose_86(l: &[u128; 3]) -> BigUint {
-    BigUint::from(l[0]) + (BigUint::from(l[1]) << 86) + (BigUint::from(l[2]) << 172)
-}
-
-/// Per-record signed carries balancing the five product columns:
-///   S_k = Σ_{i+j=k} xL_i·yL_j − Σ_{i+j=k} wL_i·qL_j − zL_k·[k<3]
-///   S_0 = carry_0·2^86;  S_k + carry_{k−1} = carry_k·2^86 (k=1..4, carry_4 = 0)
-/// Carries are signed (w·q is subtracted); see CARRY_BOUNDS.md.
-pub fn column_carries(record: &FieldOpRecord, params: &FieldAccelParams) -> [i128; 4] {
+/// Per-record signed carries balancing the seven 64-bit product columns:
+///   S_k = Σ_{i+j=k} x_i·y_j − Σ_{i+j=k} w_i·q_j − z_k·[k<4]
+///   S_0 = carry_0·2^64;  S_k + carry_{k−1} = carry_k·2^64 (k=1..5);
+///   S_6 + carry_5 = 0.
+pub fn column_carries_64(record: &FieldOpRecord, params: &FieldAccelParams) -> [i128; NUM_CARRIES] {
     use num_bigint::BigInt;
-    let x = limbs_86(&record.x).map(BigInt::from);
-    let y = limbs_86(&record.y).map(BigInt::from);
-    let z = limbs_86(&record.z).map(BigInt::from);
-    let w = limbs_86(&record.w).map(BigInt::from);
-    let q = params.modulus_limbs_86().map(BigInt::from);
+    let x = record.x.map(BigInt::from);
+    let y = record.y.map(BigInt::from);
+    let z = record.z.map(BigInt::from);
+    let w = record.w.map(BigInt::from);
+    let q = params.modulus_limbs.map(BigInt::from);
 
-    let mut carries = [0i128; 4];
+    let mut carries = [0i128; NUM_CARRIES];
     let mut carry_in = BigInt::ZERO;
-    for k in 0..5usize {
+    let two_64 = BigInt::from(1u128 << 64);
+    for k in 0..NUM_PRODUCT_COLUMNS {
         let mut s = BigInt::ZERO;
-        for i in 0..3usize {
+        for i in 0..4usize {
             let Some(j) = k.checked_sub(i) else { continue };
-            if j >= 3 {
+            if j >= 4 {
                 continue;
             }
             s += &x[i] * &y[j];
             s -= &w[i] * &q[j];
         }
-        if k < 3 {
+        if k < 4 {
             s -= &z[k];
         }
         s += &carry_in;
-        if k == 4 {
-            assert_eq!(s, BigInt::ZERO, "column 4 must balance exactly");
+        if k == NUM_PRODUCT_COLUMNS - 1 {
+            assert_eq!(s, BigInt::ZERO, "column 6 must balance exactly");
         } else {
-            let two_86 = BigInt::from(1u128 << 86) * BigInt::from(1u128); // 2^86
-            let carry = &s / &two_86;
-            assert_eq!(&carry * &two_86, s, "column {k} not divisible by 2^86");
+            let carry = &s / &two_64;
+            assert_eq!(&carry * &two_64, s, "column {k} not divisible by 2^64");
             carries[k] = i128::try_from(&carry).expect("carry exceeds i128");
             carry_in = carry;
         }
@@ -146,74 +136,74 @@ pub fn column_carries(record: &FieldOpRecord, params: &FieldAccelParams) -> [i12
     carries
 }
 
-/// The 16 committed columns of the gadget witness, one entry per record,
-/// padded with all-zero records (which satisfy the identity trivially) to a
-/// power of two. Values are held as integers here; Task 5 maps them into the
-/// proof field (signed carries via offset).
+/// The committed gadget witness, one entry per record row, padded with
+/// all-zero records (which satisfy the identity trivially) to a power of
+/// two. `words` are the same values as the record's 16-word block in the
+/// committed advice region (order: x0..3, y0..3, z0..3, w0..3); only
+/// `carries` (offset) and `digits` are gadget-committed columns in the
+/// bound protocol.
 #[derive(Clone, Debug)]
 pub struct FieldAccelWitness {
-    pub x_limbs: [Vec<u128>; 3],
-    pub y_limbs: [Vec<u128>; 3],
-    pub z_limbs: [Vec<u128>; 3],
-    pub w_limbs: [Vec<u128>; 3],
-    pub carries: [Vec<i128>; 4],
+    pub words: [Vec<u64>; 16],
+    /// Offset carries: carry + CARRY_OFFSET, in [0, 2^69).
+    pub carries: [Vec<u128>; NUM_CARRIES],
+    /// 2-bit digits of each offset carry, little-endian:
+    /// digits[j * DIGITS_PER_CARRY + d][row] = (carries[j][row] >> 2d) & 3.
+    pub digits: Vec<Vec<u8>>,
     pub num_records: usize,
 }
 
 impl FieldAccelWitness {
     pub fn from_records(records: &[FieldOpRecord], params: &FieldAccelParams) -> Self {
         let n = records.len().max(1).next_power_of_two();
-        let mut w = FieldAccelWitness {
-            x_limbs: Default::default(),
-            y_limbs: Default::default(),
-            z_limbs: Default::default(),
-            w_limbs: Default::default(),
-            carries: Default::default(),
-            num_records: records.len(),
-        };
-        for cols in [
-            &mut w.x_limbs,
-            &mut w.y_limbs,
-            &mut w.z_limbs,
-            &mut w.w_limbs,
-        ] {
-            for col in cols.iter_mut() {
-                col.reserve(n);
-            }
+        let mut words: [Vec<u64>; 16] = Default::default();
+        let mut carries: [Vec<u128>; NUM_CARRIES] = Default::default();
+        let mut digits: Vec<Vec<u8>> = vec![Vec::with_capacity(n); NUM_DIGIT_COLUMNS];
+        for col in words.iter_mut() {
+            col.reserve(n);
+        }
+        for col in carries.iter_mut() {
+            col.reserve(n);
         }
         for record in records {
-            let (x, y, z, wq) = (
-                limbs_86(&record.x),
-                limbs_86(&record.y),
-                limbs_86(&record.z),
-                limbs_86(&record.w),
-            );
-            for i in 0..3 {
-                w.x_limbs[i].push(x[i]);
-                w.y_limbs[i].push(y[i]);
-                w.z_limbs[i].push(z[i]);
-                w.w_limbs[i].push(wq[i]);
+            for (v, value) in [record.x, record.y, record.z, record.w].iter().enumerate() {
+                for (i, word) in value.iter().enumerate() {
+                    words[v * 4 + i].push(*word);
+                }
             }
-            let carries = column_carries(record, params);
-            for i in 0..4 {
-                w.carries[i].push(carries[i]);
+            let record_carries = column_carries_64(record, params);
+            for (j, carry) in record_carries.iter().enumerate() {
+                let offset = u128::try_from(carry + CARRY_OFFSET)
+                    .expect("offset carry must be non-negative");
+                assert!(offset < (1u128 << (2 * DIGITS_PER_CARRY)), "carry out of range");
+                carries[j].push(offset);
+                for d in 0..DIGITS_PER_CARRY {
+                    digits[j * DIGITS_PER_CARRY + d].push(((offset >> (2 * d)) & 3) as u8);
+                }
             }
         }
-        // zero-pad: the all-zero record satisfies 0*0 = 0*q + 0 with zero carries
-        for i in 0..3 {
-            w.x_limbs[i].resize(n, 0);
-            w.y_limbs[i].resize(n, 0);
-            w.z_limbs[i].resize(n, 0);
-            w.w_limbs[i].resize(n, 0);
+        // zero-pad: the all-zero record satisfies 0*0 = 0*q + 0 with zero
+        // carries, whose offset form is CARRY_OFFSET itself.
+        let zero_offset = u128::try_from(CARRY_OFFSET).expect("offset positive");
+        for col in words.iter_mut() {
+            col.resize(n, 0);
         }
-        for i in 0..4 {
-            w.carries[i].resize(n, 0);
+        for j in 0..NUM_CARRIES {
+            carries[j].resize(n, zero_offset);
+            for d in 0..DIGITS_PER_CARRY {
+                digits[j * DIGITS_PER_CARRY + d].resize(n, ((zero_offset >> (2 * d)) & 3) as u8);
+            }
         }
-        w
+        FieldAccelWitness {
+            words,
+            carries,
+            digits,
+            num_records: records.len(),
+        }
     }
 
     pub fn padded_len(&self) -> usize {
-        self.x_limbs[0].len()
+        self.words[0].len()
     }
 }
 
@@ -268,31 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn limbs_86_roundtrip() {
-        let mut s = 42u64;
-        for _ in 0..200 {
-            let x = random_element(&mut s);
-            let l = limbs_86(&x);
-            assert!(l.iter().all(|&v| v < (1u128 << 86)));
-            assert_eq!(recompose_86(&l), limbs_to_biguint(&x));
-        }
-        // edge: max 256-bit value decomposes and recomposes
-        let max = [u64::MAX; 4];
-        assert_eq!(recompose_86(&limbs_86(&max)), limbs_to_biguint(&max));
-    }
-
-    #[test]
-    fn record_identity_and_carries_balance() {
+    fn word_column_carries_balance() {
         let mut s = 7u64;
         for _ in 0..100 {
             let (a, b) = (random_element(&mut s), random_element(&mut s));
             let record = mulmod_record(a, b);
-            // w < 2^253 fits limbs
-            assert!(limbs_86(&record.w).iter().all(|&v| v < (1u128 << 86)));
-            // column_carries panics internally if any column fails to balance
-            let carries = column_carries(&record, &params());
-            // carry magnitudes stay well below 2^92 (see CARRY_BOUNDS.md)
-            assert!(carries.iter().all(|c| c.unsigned_abs() < (1u128 << 92)));
+            // column_carries_64 panics internally if any column fails to
+            // balance; carry magnitudes stay below 2^68 (CARRY_BOUNDS.md)
+            let carries = column_carries_64(&record, &params());
+            assert!(carries.iter().all(|c| c.unsigned_abs() < (1u128 << 68)));
         }
     }
 
@@ -305,13 +279,20 @@ mod tests {
         let w = FieldAccelWitness::from_records(&records, &params());
         assert_eq!(w.padded_len(), 8);
         assert_eq!(w.num_records, 5);
-        // padding rows are all zero across every column
-        for i in 0..3 {
-            assert_eq!(&w.x_limbs[i][5..], &[0, 0, 0]);
-            assert_eq!(&w.z_limbs[i][5..], &[0, 0, 0]);
+        // padding rows: zero words, offset carries equal to CARRY_OFFSET,
+        // digits recompose to the offset
+        for col in w.words.iter() {
+            assert_eq!(&col[5..], &[0, 0, 0]);
         }
-        for i in 0..4 {
-            assert_eq!(&w.carries[i][5..], &[0, 0, 0]);
+        let zero_offset = u128::try_from(CARRY_OFFSET).unwrap();
+        for j in 0..NUM_CARRIES {
+            assert_eq!(&w.carries[j][5..], &[zero_offset; 3]);
+            for row in 5..8 {
+                let recomposed: u128 = (0..DIGITS_PER_CARRY)
+                    .map(|d| (w.digits[j * DIGITS_PER_CARRY + d][row] as u128) << (2 * d))
+                    .sum();
+                assert_eq!(recomposed, zero_offset);
+            }
         }
     }
 }

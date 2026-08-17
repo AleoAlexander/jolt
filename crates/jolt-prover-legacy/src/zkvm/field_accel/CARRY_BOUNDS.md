@@ -1,4 +1,36 @@
-# Carry bounds for the field-acceleration limb equation (B1)
+# Carry bounds for the field-acceleration limb equation
+
+## B2 64-bit word schema (current, plan Task 3)
+
+The bound gadget checks the identity directly over the four 64-bit words of
+each value — the words of the record's block in the committed advice region —
+so there is no dual limb representation and no recomposition-aliasing
+argument. Seven product columns (`k = 0..6`, pairs `i + j = k`, `i, j < 4`,
+multiplicities `m_k = (1, 2, 3, 4, 3, 2, 1)`):
+
+```
+S_k^raw = Σ_{i+j=k} x_i·y_j − Σ_{i+j=k} w_i·q_j − z_k·[k<4]
+```
+
+Magnitudes: each product `< 2^128`, so `|S_k^raw| < (m_k + m_k)·2^128 + 2^64
+≤ 8·2^128 + 2^64 < 2^131.1`. The running carry satisfies `|carry_k| ≤
+(|S_k^raw| + |carry_{k−1}|)/2^64`, giving `|carry_k| < 2^67.2` for all k
+(dominated by `2^131.1 / 2^64`). Committed form: `carry' = carry + 2^68 ∈
+(0, 2^69)`, range-checked by 35 two-bit digits (70 bits of capacity).
+
+Field-vs-integer soundness: every batched constraint value is bounded by
+`|S_k^raw| + carry terms < 2^131.1 + 2^70 + 2^64·2^70 < 2^134.1 ≪ r ≈
+2^254` (BN254 Fr), so each field-zero column equation is an integer-zero
+equation; telescoping `Σ_k S_k·2^{64k}` yields `x·y − w·q − z = 0` over ℤ.
+Word ranges (`< 2^64`) come from the committed advice region's byte
+construction (welded x/y/z words additionally equal RAM-checked guest
+values); only the carries need built range checks — the digit family.
+
+The 86-bit derivation below is retained for the superseded B1 schema.
+
+---
+
+# Carry bounds for the field-acceleration limb equation (B1, superseded)
 
 This note derives the magnitude bounds for the signed carry columns used by
 the B1 batched sumcheck (`sumcheck.rs`), and enumerates the range checks that

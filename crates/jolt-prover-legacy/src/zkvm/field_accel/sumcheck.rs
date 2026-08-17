@@ -1,108 +1,107 @@
-//! B1 batched verification sumcheck for the field-acceleration prototype.
+//! B2 batched verification sumcheck for the field-acceleration prototype,
+//! 64-bit word schema.
 //!
-//! A STANDALONE side-proof, deliberately NOT wired into the 7-stage pipeline:
-//! an eq-weighted zero-check over the invocation log proving that every record
-//! satisfies the per-column limb equation
+//! An eq-weighted zero-check over the record rows proving, per row, the
+//! α/γ-batched constraint families:
 //!
-//!   S_k = Σ_{i+j=k, i,j<3} xL_i·yL_j − Σ_{i+j=k} wL_i·qL_j − zL_k·[k<3]
-//!         + carry_{k−1} − carry_k·2^86  == 0   for k = 0..4,
+//! - product columns (k = 0..6, degree 2):
+//!   `C_k = Σ_{i+j=k, i,j<4} x_i·y_j − Σ_{i+j=k} w_i·q_j − z_k·[k<4]
+//!          + (carry'_{k−1} − OFF)·[k≥1] − 2^64·(carry'_k − OFF)·[k≤5]`
+//! - carry recomposition (j = 0..5, degree 1):
+//!   `R_j = Σ_{d<35} 4^d·digit_{j,d} − carry'_j`
+//! - digit validity (210 columns, degree 4):
+//!   `D_{j,d} = digit·(digit−1)·(digit−2)·(digit−3)`
 //!
-//! with carry_{-1} = carry_4 = 0 and qL the guest-declared modulus limbs as
-//! public constants. The five columns are batched with a transcript challenge
-//! alpha: C(row) = Σ_k alpha^k · S_k(row), and the statement proved is
-//! Σ_row eq(tau, row) · C(row) == 0.
+//! with `q` the guest-declared modulus WORDS as public constants and
+//! `OFF = 2^68` the carry offset. Batching: `Σ_k α^k·C_k + Σ_j α^{7+j}·R_j
+//! + α^13·Σ_{j,d} γ^{j·35+d}·D_{j,d}`; the proved statement is
+//! `Σ_row eq(τ,row)·batched(row) == 0`. Round messages are degree ≤ 5.
 //!
 //! Soundness of the integer identity given the field identity relies on the
-//! magnitude bounds in CARRY_BOUNDS.md (all column magnitudes < 2^250 ≪ the
-//! BN254 Fr modulus, so the field equation cannot wrap around), which in turn
-//! assume the limb/carry range checks that B2/Track C must enforce.
+//! magnitude bounds in CARRY_BOUNDS.md (all column magnitudes ≪ the BN254 Fr
+//! modulus, so the field equation cannot wrap), which the digit range checks
+//! enforce for the carries; the 16 word columns are u64 by construction of
+//! the committed advice region whose blocks they mirror.
 //!
-//! PROTOTYPE: the 16 final column evaluations are sent IN THE CLEAR and are
-//! NOT bound by any polynomial commitment. A malicious prover can therefore
-//! invent arbitrary final evaluations consistent with its round polynomials.
-//! PCS binding of the witness columns (and range checks) is Track C. What B1
-//! demonstrates is the sumcheck arithmetization itself: an honest prover over
-//! a *tampered* witness log produces a proof that fails verification (see the
-//! tamper tests below).
+//! PROTOTYPE (standalone mode): the final column evaluations are sent in the
+//! clear. The bound protocol (plan Task 4) replaces the word evaluations
+//! with openings of the committed `UntrustedAdvice` polynomial and the
+//! aux-column evaluations with Dory-batched openings.
 
-use super::{FieldAccelParams, FieldAccelWitness};
+use super::{
+    FieldAccelParams, FieldAccelWitness, CARRY_OFFSET, DIGITS_PER_CARRY, NUM_CARRIES,
+    NUM_DIGIT_COLUMNS, NUM_PRODUCT_COLUMNS,
+};
 use crate::field::JoltField;
 use crate::poly::unipoly::UniPoly;
 use crate::transcripts::Transcript;
 
-/// Column order: x_limbs[0..3], y_limbs[0..3], z_limbs[0..3], w_limbs[0..3],
-/// carries[0..4].
-pub const NUM_COLUMNS: usize = 16;
+/// Column order: words x0..3 y0..3 z0..3 w0..3, then offset carries 0..6,
+/// then digits (j·35 + d).
+pub const NUM_WORD_COLUMNS: usize = 16;
+pub const NUM_TOTAL_COLUMNS: usize = NUM_WORD_COLUMNS + NUM_CARRIES + NUM_DIGIT_COLUMNS;
 
 const X: usize = 0;
-const Y: usize = 3;
-const Z: usize = 6;
-const W: usize = 9;
-const CARRY: usize = 12;
+const Y: usize = 4;
+const Z: usize = 8;
+const W: usize = 12;
+const CARRY: usize = NUM_WORD_COLUMNS;
+const DIG: usize = NUM_WORD_COLUMNS + NUM_CARRIES;
 
-/// The 16 clear column evaluations at the sumcheck point r. The verifier
-/// computes eq(tau, r) itself, so no 17th evaluation is sent.
+/// Degree of the row polynomial inside the zero-check (digit validity), so
+/// round messages have DEGREE + 1 = 6 evaluations with the eq factor.
+const DEGREE: usize = 5;
+
+/// The clear column evaluations at the sumcheck point r (standalone mode).
+/// The verifier computes eq(tau, r) itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldAccelEvals<F: JoltField> {
-    pub columns: [F; NUM_COLUMNS],
+    pub columns: Vec<F>,
 }
 
 #[derive(Clone, Debug)]
 pub struct FieldAccelProof<F: JoltField> {
-    /// One degree-3 univariate message per round (coefficient form).
+    /// One degree-5 univariate message per round (coefficient form).
     pub round_polys: Vec<UniPoly<F>>,
     pub final_evals: FieldAccelEvals<F>,
 }
 
-/// Absorb the public statement (row count and modulus) before drawing tau
-/// and alpha. Prover and verifier must call this identically.
+/// Absorb the public statement (row count and modulus) before drawing tau,
+/// alpha, and gamma. Prover and verifier must call this identically.
 fn bind_statement<T: Transcript>(params: &FieldAccelParams, log_n: usize, transcript: &mut T) {
-    transcript.append_label(b"field_accel_b1");
+    transcript.append_label(b"field_accel_b2");
     transcript.append_u64(b"fa_log_n", log_n as u64);
     for limb in params.modulus_limbs {
         transcript.append_u64(b"fa_modulus_limb", limb);
     }
 }
 
-/// Lift the integer witness columns into F.
-///
-/// Unsigned 86-bit limbs map via `from_u128`; signed carries map via
-/// `from_i128` (negative c ↦ −|c| in F). Because every limb is < 2^86 and
-/// every carry magnitude is < 2^88 (CARRY_BOUNDS.md), all intermediate column
-/// values in the constraint stay below 2^250 in magnitude, far under the
-/// BN254 Fr modulus (~2^254), so the integer identity holds iff the field
-/// identity holds — no wraparound is possible.
+/// Lift the witness columns into F. Words are u64; offset carries are
+/// < 2^70; digits are < 4. All magnitudes in the batched constraint stay
+/// far below the BN254 Fr modulus (CARRY_BOUNDS.md), so the integer
+/// identity holds iff the field identity holds.
 fn witness_columns<F: JoltField>(witness: &FieldAccelWitness) -> Vec<Vec<F>> {
-    let mut cols: Vec<Vec<F>> = Vec::with_capacity(NUM_COLUMNS);
-    for group in [
-        &witness.x_limbs,
-        &witness.y_limbs,
-        &witness.z_limbs,
-        &witness.w_limbs,
-    ] {
-        for col in group.iter() {
-            cols.push(col.iter().map(|&v| F::from_u128(v)).collect());
-        }
+    let mut cols: Vec<Vec<F>> = Vec::with_capacity(NUM_TOTAL_COLUMNS);
+    for col in witness.words.iter() {
+        cols.push(col.iter().map(|&v| F::from_u64(v)).collect());
     }
     for col in witness.carries.iter() {
-        cols.push(col.iter().map(|&v| F::from_i128(v)).collect());
+        cols.push(col.iter().map(|&v| F::from_u128(v)).collect());
+    }
+    for col in witness.digits.iter() {
+        cols.push(col.iter().map(|&v| F::from_u64(v as u64)).collect());
     }
     cols
 }
 
 /// eq table over the hypercube: table[idx] = Π_j (bit_j(idx) ? tau_j : 1−tau_j),
-/// with bit j of the row index (little-endian) paired with tau[j]. Binding the
-/// low variable each round (pairs (2i, 2i+1)) then binds tau[j] against the
-/// round-j challenge, matching the verifier's product formula.
+/// little-endian bit/variable pairing; binding the low variable each round
+/// consumes tau[0], tau[1], ... in order, matching the verifier's product.
 fn eq_table<F: JoltField>(tau: &[F]) -> Vec<F> {
     let mut table = vec![F::one()];
     for t in tau {
         let one_minus_t = F::one() - *t;
         let mut next = Vec::with_capacity(table.len() * 2);
-        // Each new variable becomes the HIGH bit (low half = bit 0, high half
-        // = bit 1) so earlier variables keep their lower bit positions and
-        // binding the low variable per round consumes tau[0], tau[1], ... in
-        // order — matching the verifier's Π_j (tau_j·r_j + (1−tau_j)(1−r_j)).
         for &e in &table {
             next.push(e * one_minus_t);
         }
@@ -114,40 +113,89 @@ fn eq_table<F: JoltField>(tau: &[F]) -> Vec<F> {
     table
 }
 
-/// C(vals) = Σ_k alpha^k · S_k(vals) — the batched column constraint at a
-/// single (possibly virtual) row.
+pub struct BatchingChallenges<F: JoltField> {
+    /// alpha^0..alpha^13 (13 = 7 product + 6 recomposition; index 13 scales
+    /// the digit family).
+    pub alpha_pows: [F; 14],
+    /// gamma^0..gamma^209 for the digit-validity columns.
+    pub gamma_pows: Vec<F>,
+}
+
+impl<F: JoltField> BatchingChallenges<F> {
+    fn draw<T: Transcript>(transcript: &mut T) -> Self {
+        let alpha: F = transcript.challenge_scalar();
+        let gamma: F = transcript.challenge_scalar();
+        let mut alpha_pows = [F::one(); 14];
+        for k in 1..14 {
+            alpha_pows[k] = alpha_pows[k - 1] * alpha;
+        }
+        let mut gamma_pows = Vec::with_capacity(NUM_DIGIT_COLUMNS);
+        let mut g = F::one();
+        for _ in 0..NUM_DIGIT_COLUMNS {
+            gamma_pows.push(g);
+            g *= gamma;
+        }
+        BatchingChallenges {
+            alpha_pows,
+            gamma_pows,
+        }
+    }
+}
+
+/// The batched row constraint at a single (possibly virtual) row.
 fn constraint_eval<F: JoltField>(
-    vals: &[F; NUM_COLUMNS],
-    q: &[F; 3],
-    alpha_pows: &[F; 5],
-    two_86: F,
+    vals: &[F],
+    q_words: &[F; 4],
+    ch: &BatchingChallenges<F>,
 ) -> F {
+    let two_64 = F::from_u128(1u128 << 64);
+    let offset = F::from_u128(CARRY_OFFSET as u128);
     let mut acc = F::zero();
-    for (k, alpha_k) in alpha_pows.iter().enumerate() {
+    // product columns
+    for k in 0..NUM_PRODUCT_COLUMNS {
         let mut s = F::zero();
-        for i in 0..3usize {
+        for i in 0..4usize {
             let Some(j) = k.checked_sub(i) else { continue };
-            if j >= 3 {
+            if j >= 4 {
                 continue;
             }
             s += vals[X + i] * vals[Y + j];
-            s -= vals[W + i] * q[j];
+            s -= vals[W + i] * q_words[j];
         }
-        if k < 3 {
+        if k < 4 {
             s -= vals[Z + k];
         }
         if k >= 1 {
-            s += vals[CARRY + k - 1];
+            s += vals[CARRY + k - 1] - offset;
         }
-        if k < 4 {
-            s -= vals[CARRY + k] * two_86;
+        if k <= 5 {
+            s -= two_64 * (vals[CARRY + k] - offset);
         }
-        acc += *alpha_k * s;
+        acc += ch.alpha_pows[k] * s;
     }
-    acc
+    // carry recomposition
+    for j in 0..NUM_CARRIES {
+        let mut s = F::zero();
+        let mut pow4 = F::one();
+        let four = F::from_u64(4);
+        for d in 0..DIGITS_PER_CARRY {
+            s += pow4 * vals[DIG + j * DIGITS_PER_CARRY + d];
+            pow4 *= four;
+        }
+        s -= vals[CARRY + j];
+        acc += ch.alpha_pows[NUM_PRODUCT_COLUMNS + j] * s;
+    }
+    // digit validity, gamma-batched under alpha^13
+    let mut dig_acc = F::zero();
+    let (one, two, three) = (F::one(), F::from_u64(2), F::from_u64(3));
+    for (idx, gamma_k) in ch.gamma_pows.iter().enumerate() {
+        let v = vals[DIG + idx];
+        dig_acc += *gamma_k * (v * (v - one) * (v - two) * (v - three));
+    }
+    acc + ch.alpha_pows[13] * dig_acc
 }
 
-/// Bind the lowest variable of a multilinear column to r: v'[i] = v[2i] + r·(v[2i+1] − v[2i]).
+/// Bind the lowest variable of a multilinear column to r.
 fn bind_low<F: JoltField>(v: &mut Vec<F>, r: F) {
     let half = v.len() / 2;
     for i in 0..half {
@@ -164,14 +212,6 @@ fn eval_unipoly<F: JoltField>(poly: &UniPoly<F>, r: F) -> F {
         .fold(F::zero(), |acc, c| acc * r + *c)
 }
 
-fn alpha_powers<F: JoltField>(alpha: F) -> [F; 5] {
-    let mut pows = [F::one(); 5];
-    for k in 1..5 {
-        pows[k] = pows[k - 1] * alpha;
-    }
-    pows
-}
-
 pub fn prove_field_accel<F: JoltField, T: Transcript>(
     witness: &FieldAccelWitness,
     params: &FieldAccelParams,
@@ -183,24 +223,22 @@ pub fn prove_field_accel<F: JoltField, T: Transcript>(
 
     bind_statement(params, log_n, transcript);
     let tau: Vec<F> = transcript.challenge_vector(log_n);
-    let alpha: F = transcript.challenge_scalar();
-    let alpha_pows = alpha_powers(alpha);
-    let q = params.modulus_limbs_86().map(F::from_u128);
-    let two_86 = F::from_u128(1u128 << 86);
+    let ch = BatchingChallenges::draw(transcript);
+    let q_words = params.modulus_limbs.map(F::from_u64);
 
     let mut cols = witness_columns::<F>(witness);
     let mut eq = eq_table::<F>(&tau);
 
     let mut round_polys = Vec::with_capacity(log_n);
     let mut m = n;
+    let mut cur = vec![F::zero(); NUM_TOTAL_COLUMNS];
+    let mut diff = vec![F::zero(); NUM_TOTAL_COLUMNS];
     for _round in 0..log_n {
         m /= 2;
-        // Degree-3 message: evaluate Σ_i eq(t, i) · C(t, i) at t = 0, 1, 2, 3
-        // over the remaining hypercube. O(4 · 17 · m) per round — prototype.
-        let mut evals = [F::zero(); 4];
+        // Degree-5 message: evaluate Σ_i eq(t, i) · C(t, i) at t = 0..5
+        // over the remaining hypercube. O(6 · 233 · m) per round — prototype.
+        let mut evals = [F::zero(); DEGREE + 1];
         for i in 0..m {
-            let mut cur = [F::zero(); NUM_COLUMNS];
-            let mut diff = [F::zero(); NUM_COLUMNS];
             for ((cur_c, diff_c), col) in cur.iter_mut().zip(diff.iter_mut()).zip(cols.iter()) {
                 let lo = col[2 * i];
                 *cur_c = lo;
@@ -210,8 +248,8 @@ pub fn prove_field_accel<F: JoltField, T: Transcript>(
             let eq_diff = eq[2 * i + 1] - eq_lo;
             let mut eq_cur = eq_lo;
             for (t, eval) in evals.iter_mut().enumerate() {
-                *eval += eq_cur * constraint_eval(&cur, &q, &alpha_pows, two_86);
-                if t < 3 {
+                *eval += eq_cur * constraint_eval(&cur, &q_words, &ch);
+                if t < DEGREE {
                     for (cur_c, diff_c) in cur.iter_mut().zip(diff.iter()) {
                         *cur_c += *diff_c;
                     }
@@ -230,16 +268,11 @@ pub fn prove_field_accel<F: JoltField, T: Transcript>(
         round_polys.push(poly);
     }
 
-    let mut columns = [F::zero(); NUM_COLUMNS];
-    for (out, col) in columns.iter_mut().zip(cols.iter()) {
-        *out = col[0];
-    }
+    let columns: Vec<F> = cols.iter().map(|col| col[0]).collect();
     FieldAccelProof {
         round_polys,
-        // PROTOTYPE: these final evaluations are sent in the clear and are NOT
-        // bound by any polynomial commitment — nothing ties them to the
-        // committed witness because there is no committed witness yet. PCS
-        // binding (Dory openings of the 16 columns) is Track C.
+        // PROTOTYPE (standalone): clear final evaluations; the bound
+        // protocol replaces these with committed-polynomial openings.
         final_evals: FieldAccelEvals { columns },
     }
 }
@@ -252,10 +285,13 @@ pub fn verify_field_accel<F: JoltField, T: Transcript>(
 ) -> Result<(), &'static str> {
     bind_statement(params, log_num_rows, transcript);
     let tau: Vec<F> = transcript.challenge_vector(log_num_rows);
-    let alpha: F = transcript.challenge_scalar();
+    let ch = BatchingChallenges::draw(transcript);
 
     if proof.round_polys.len() != log_num_rows {
         return Err("wrong number of sumcheck rounds");
+    }
+    if proof.final_evals.columns.len() != NUM_TOTAL_COLUMNS {
+        return Err("wrong number of final column evaluations");
     }
 
     // Standard sumcheck recurrence: claim_0 = 0 (zero-check);
@@ -263,7 +299,7 @@ pub fn verify_field_accel<F: JoltField, T: Transcript>(
     let mut claim = F::zero();
     let mut r_vec = Vec::with_capacity(log_num_rows);
     for poly in &proof.round_polys {
-        if poly.coeffs.is_empty() || poly.coeffs.len() > 4 {
+        if poly.coeffs.is_empty() || poly.coeffs.len() > DEGREE + 1 {
             return Err("round polynomial has wrong degree");
         }
         if poly.eval_at_zero() + poly.eval_at_one() != claim {
@@ -275,19 +311,16 @@ pub fn verify_field_accel<F: JoltField, T: Transcript>(
         r_vec.push(r);
     }
 
-    // The verifier computes eq(tau, r) itself — it is not part of final_evals.
+    // The verifier computes eq(tau, r) itself.
     let eq_eval = tau.iter().zip(r_vec.iter()).fold(F::one(), |acc, (t, r)| {
         acc * (*t * *r + (F::one() - *t) * (F::one() - *r))
     });
 
-    let q = params.modulus_limbs_86().map(F::from_u128);
-    let alpha_pows = alpha_powers(alpha);
-    let two_86 = F::from_u128(1u128 << 86);
-    let c = constraint_eval(&proof.final_evals.columns, &q, &alpha_pows, two_86);
+    let q_words = params.modulus_limbs.map(F::from_u64);
+    let c = constraint_eval(&proof.final_evals.columns, &q_words, &ch);
 
-    // PROTOTYPE: final_evals are unauthenticated clear values (no PCS opening
-    // ties them to a commitment); this equality is the whole final check. See
-    // the module doc — commitment binding is Track C.
+    // PROTOTYPE (standalone): final_evals are unauthenticated clear values;
+    // commitment binding is the bound protocol (plan Task 4).
     if claim != eq_eval * c {
         return Err("final sumcheck evaluation check failed");
     }
@@ -374,9 +407,9 @@ mod tests {
     }
 
     #[test]
-    fn tampered_z_limb_fails() {
+    fn tampered_word_fails() {
         let mut witness = random_witness(5678, 5);
-        witness.z_limbs[0][2] += 1;
+        witness.words[Z][2] = witness.words[Z][2].wrapping_add(1);
         let proof = prove(&witness);
         assert!(verify(&proof, 3).is_err());
     }
@@ -384,14 +417,48 @@ mod tests {
     #[test]
     fn tampered_carry_fails() {
         let mut witness = random_witness(91011, 5);
-        witness.carries[1][3] += 1;
+        // shift carry AND its digits consistently: recomposition holds but
+        // the product identity breaks
+        witness.carries[1][3] += 4;
+        witness.digits[DIGITS_PER_CARRY + 1][3] += 1;
+        let proof = prove(&witness);
+        assert!(verify(&proof, 3).is_err());
+    }
+
+    #[test]
+    fn digit_out_of_range_fails() {
+        let mut witness = random_witness(121314, 5);
+        // move value 4 into one digit and compensate the next so the carry
+        // recomposition still holds — only the digit-validity family trips
+        let j = 2usize;
+        let row = 1usize;
+        let d0 = witness.digits[j * DIGITS_PER_CARRY][row];
+        let d1 = witness.digits[j * DIGITS_PER_CARRY + 1][row];
+        if d1 == 0 {
+            // ensure representable: bump carry by 4 consistently first
+            witness.carries[j][row] += 4;
+            witness.digits[j * DIGITS_PER_CARRY + 1][row] = 1;
+        }
+        witness.digits[j * DIGITS_PER_CARRY][row] = d0 + 4;
+        witness.digits[j * DIGITS_PER_CARRY + 1][row] =
+            witness.digits[j * DIGITS_PER_CARRY + 1][row] - 1;
+        // recomposition unchanged: +4·4^0 − 1·4^1 = 0; digit 0 is now ≥ 4
+        let proof = prove(&witness);
+        assert!(verify(&proof, 3).is_err(), "out-of-range digit must fail");
+    }
+
+    #[test]
+    fn carry_offset_forgery_fails() {
+        let mut witness = random_witness(151617, 5);
+        // inconsistent digit tamper: recomposition family must trip
+        witness.digits[5][2] = (witness.digits[5][2] + 1) % 4;
         let proof = prove(&witness);
         assert!(verify(&proof, 3).is_err());
     }
 
     #[test]
     fn tampered_final_evals_fail() {
-        let witness = random_witness(121314, 5);
+        let witness = random_witness(181920, 5);
         let mut proof = prove(&witness);
         proof.final_evals.columns[0] += Fr::from_u64(1);
         assert!(verify(&proof, 3).is_err());
