@@ -14,8 +14,9 @@
 use ark_ed_on_bls12_377::Fq;
 use ark_ff::{BigInt, Field, PrimeField};
 use jolt_inlines_sdk::host::{
-    Cpu, ExpandedInstructionSequence, ExpansionError, FieldElementAdvice, FormatInline,
-    InlineBuilderExt, InlineExpansionBuilder, InlineOp, InlineOperands,
+    load_field_element_limbs, ExpandedInstructionSequence, ExpansionError, FieldElementAdvice,
+    FormatInline, InlineAdviceContext, InlineAdviceError, InlineBuilderExt,
+    InlineExpansionBuilder, InlineOp, InlineOperands,
 };
 
 /// p = 2^256 - q, computed from the arkworks modulus (never hand-transcribed).
@@ -32,12 +33,8 @@ pub fn neg_modulus_limbs() -> [u64; 4] {
     p
 }
 
-fn load_fq(cpu: &mut Cpu, addr: u64) -> Fq {
-    let mut limbs = [0u64; 4];
-    for (i, limb) in limbs.iter_mut().enumerate() {
-        *limb = cpu.mmu.load_doubleword(addr + 8 * i as u64).map(|v| v.0).unwrap_or(0);
-    }
-    Fq::new(BigInt(limbs))
+fn load_fq(ctx: &mut dyn InlineAdviceContext, addr: u64) -> Result<Fq, InlineAdviceError> {
+    Ok(Fq::new(BigInt(load_field_element_limbs(ctx, addr)?)))
 }
 
 // PROTOTYPE: host-side invocation log. Records are normalized to the
@@ -94,15 +91,20 @@ macro_rules! edbls_advice_op {
             ) -> Result<ExpandedInstructionSequence, ExpansionError> {
                 advice_only_sequence(asm, operands)
             }
-            fn build_advice(operands: FormatInline, cpu: &mut Cpu) -> Self::Advice {
+            fn build_advice(
+                operands: FormatInline,
+                ctx: &mut dyn InlineAdviceContext,
+            ) -> Result<Self::Advice, InlineAdviceError> {
                 let compute: fn(Fq, Fq) -> Fq = $compute;
                 let normalize: fn(Fq, Fq, Fq) -> (Fq, Fq, Fq) = $normalize;
-                let a = load_fq(cpu, cpu.x[operands.rs1 as usize] as u64);
-                let b = load_fq(cpu, cpu.x[operands.rs2 as usize] as u64);
+                let a_addr = ctx.register(operands.rs1 as usize);
+                let a = load_fq(ctx, a_addr)?;
+                let b_addr = ctx.register(operands.rs2 as usize);
+                let b = load_fq(ctx, b_addr)?;
                 let c = compute(a, b);
                 let (x, y, z) = normalize(a, b, c);
                 log_record(x, y, z);
-                result_advice(c)
+                Ok(result_advice(c))
             }
         }
     };
