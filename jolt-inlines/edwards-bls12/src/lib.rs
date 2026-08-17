@@ -32,6 +32,7 @@ pub const EDBLS_SQUAREQ_NAME: &str = "EDBLS_SQUAREQ";
 pub const EDBLS_DIVQ_FUNCT3: u32 = 0x02;
 pub const EDBLS_DIVQ_NAME: &str = "EDBLS_DIVQ";
 
+pub mod bind;
 pub mod sdk;
 pub use sdk::*;
 

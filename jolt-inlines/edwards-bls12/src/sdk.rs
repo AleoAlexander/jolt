@@ -132,6 +132,7 @@ impl Fq {
         if is_fq_non_canonical(&e) {
             jolt_inlines_sdk::spoil_proof();
         }
+        crate::bind::weld(&self.e, &other.e, &e);
         Fq { e }
     }
 
@@ -152,6 +153,7 @@ impl Fq {
         if is_fq_non_canonical(&e) {
             jolt_inlines_sdk::spoil_proof();
         }
+        crate::bind::weld(&self.e, &self.e, &e);
         Fq { e }
     }
 }
@@ -206,6 +208,8 @@ impl Fq {
         if is_fq_non_canonical(&e) {
             jolt_inlines_sdk::spoil_proof();
         }
+        // Div normalizes to the verified identity (c, b, a): c*b == a.
+        crate::bind::weld(&e, &divisor.e, &self.e);
         Fq { e }
     }
 }

@@ -10,6 +10,8 @@ repository = "https://github.com/a16z/jolt"
 [features]
 default = []
 host = ["jolt-inlines-sdk/host"]
+# B2: guest-side weld of each field op to its committed advice-region record
+field-accel-bind = []
 
 [dependencies]
 jolt-inlines-sdk = { workspace = true }

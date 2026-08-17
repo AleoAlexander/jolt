@@ -2,11 +2,7 @@
 
 use crate::sdk::{Fq, MODULUS};
 use ark_ed_on_bls12_377::Fq as ArkFq;
-use ark_ff::{BigInt, Field, PrimeField, UniformRand, Zero};
-
-fn ark(e: [u64; 4]) -> ArkFq {
-    ArkFq::new(BigInt(e))
-}
+use ark_ff::{Field, PrimeField, UniformRand, Zero};
 
 #[test]
 fn modulus_matches_arkworks() {
@@ -176,4 +172,83 @@ fn scalar_mul_matches_arkworks() {
         ([0u64; 4], [1u64, 0, 0, 0])
     );
     assert_point_eq(&g.scalar_mul(&[1, 0, 0, 0]), &ArkP::generator(), "1*G");
+}
+
+// --- B2 record blob (plan Task 2) -------------------------------------------
+
+#[test]
+fn record_blob_layout_and_identity() {
+    use crate::sequence_builder::{build_record_blob, record_from_xyz};
+    use jolt_inlines_sdk::host::{limbs_to_nbiguint, NBigUint};
+
+    let q = limbs_to_nbiguint(&crate::sdk::MODULUS);
+    let a = Fq { e: [3, 1, 4, 0x100] };
+    let b = Fq { e: [2, 7, 1, 0x80] };
+    let c = a.mul(&b);
+
+    let rec = record_from_xyz(a.e, b.e, c.e);
+    // rec = (x, y, z, w) with x*y == w*q + z exactly over the integers
+    let (x, y, z, w) = rec;
+    assert_eq!(x, a.e);
+    assert_eq!(y, b.e);
+    assert_eq!(z, c.e);
+    let lhs = limbs_to_nbiguint(&x) * limbs_to_nbiguint(&y);
+    let rhs = limbs_to_nbiguint(&w) * &q + limbs_to_nbiguint(&z);
+    assert_eq!(lhs, rhs, "x*y == w*q + z");
+
+    // Div normalization: block is (c, b, a) with c*b == w*q + a
+    let quotient = a.div(&b);
+    let (dx, dy, dz, dw) = record_from_xyz(quotient.e, b.e, a.e);
+    let dlhs = limbs_to_nbiguint(&dx) * limbs_to_nbiguint(&dy);
+    let drhs = limbs_to_nbiguint(&dw) * &q + limbs_to_nbiguint(&dz);
+    assert_eq!(dlhs, drhs, "c*b == w*q + a");
+
+    // blob: 16-word blocks in record order
+    let blob = build_record_blob(&[rec, (dx, dy, dz, dw)]);
+    assert_eq!(blob.len(), 32);
+    assert_eq!(&blob[0..4], &x);
+    assert_eq!(&blob[4..8], &y);
+    assert_eq!(&blob[8..12], &z);
+    assert_eq!(&blob[12..16], &w);
+    assert_eq!(&blob[16..20], &dx);
+    assert_eq!(&blob[28..32], &dw);
+    let _ = NBigUint::ZERO; // silence unused-import lint if asserts compile out
+}
+
+#[test]
+fn field_op_log_returns_xyzw_tuples() {
+    use crate::sequence_builder::{log_record_for_test, take_field_op_log};
+    let a = Fq { e: [5, 0, 0, 0] };
+    let b = Fq { e: [7, 0, 0, 0] };
+    let c = a.mul(&b);
+    let _ = take_field_op_log(); // drain
+    log_record_for_test(a.e, b.e, c.e);
+    let log = take_field_op_log();
+    assert_eq!(log.len(), 1);
+    let (x, y, z, w) = log[0];
+    assert_eq!((x, y, z), (a.e, b.e, c.e));
+    assert_eq!(w, [0, 0, 0, 0], "5*7=35 < q so quotient is 0");
+}
+
+#[test]
+fn padded_blob_satisfies_guest_pad_rule() {
+    use crate::bind::{head_pad, RECORD_BYTES};
+    use crate::sequence_builder::{build_record_blob_padded, record_from_xyz};
+
+    let a = Fq { e: [3, 1, 4, 0x100] };
+    let b = Fq { e: [2, 7, 1, 0x80] };
+    let c = a.mul(&b);
+    let rec = record_from_xyz(a.e, b.e, c.e);
+
+    for n in [1usize, 2, 5, 1000] {
+        let records = vec![rec; n];
+        let blob = build_record_blob_padded(&records);
+        let pad = head_pad(blob.len());
+        assert!(blob.len() >= pad);
+        assert_eq!((blob.len() - pad) % RECORD_BYTES, 0, "n={n}");
+        assert_eq!((blob.len() - pad) / RECORD_BYTES, n, "n={n}");
+        // pad bytes are zero; first block starts with x0
+        assert!(blob[..pad].iter().all(|&v| v == 0));
+        assert_eq!(&blob[pad..pad + 8], &rec.0[0].to_le_bytes());
+    }
 }
