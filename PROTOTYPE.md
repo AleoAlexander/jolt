@@ -1,7 +1,9 @@
 # Field-Acceleration Prototype (branch aleo/field-accel-prototype)
 
 **Purpose:** evidence for the RFC "prover-side foreign-field acceleration
-(guest-declared modulus)" — NOT for merge. Base: fork of a16z/jolt @ b092110.
+(guest-declared modulus)" — NOT for merge. Originally built on a16z/jolt @
+b092110; rebased onto upstream main 552ba6192 (2026-08-17) with all gates
+re-run green and numbers re-measured (see RESULTS.md `rebase-20260817`).
 
 ## What this branch demonstrates
 - B0: advice-only field ops (jolt-inlines/edwards-bls12): 41 cyc/op vs 252
@@ -32,9 +34,10 @@ Distinct from the protocol-design requirements above — these are code-level:
   because Fq derives Eq on raw limbs and add()/the overflow argument assume
   < q. Real (small) soundness crack in release; fix = reduce or spoil_proof
   instead of debug_assert. Present at phase0-complete and HEAD.
-- **load_fq ...unwrap_or(0)** (sequence_builder.rs HEAD): an unmapped/failed
-  memory load silently becomes limb 0, corrupting the logged record. Harmless
-  in B0 (unbound); a latent desync once B1 binds the log to the trace.
+- **load_fq ...unwrap_or(0)** — FIXED by the 2026-08-17 rebase: upstream's
+  InlineAdviceContext API returns Result, so a failed memory load now surfaces
+  as InlineAdviceError instead of silently becoming limb 0. (Was: latent
+  desync once B1 binds the log to the trace.)
 - **add() debug_assert!(!carry)** (sdk.rs): drops carry-out in release;
   reachable only via non-canonical inputs (same root as from_canonical).
 - **FIELD_OP_LOG thread-local**: correct single-pass for the published

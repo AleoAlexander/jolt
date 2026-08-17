@@ -160,3 +160,30 @@ verify time: 0.074s, valid: true
 4497948672  maximum resident set size
 ```
 
+## rebase-20260817 — 2026-08-17 — e9d7b87d7
+```
+"record_decrypt": 479468 RV64IMAC cycles + 44560 virtual instructions = 524028 total cycles
+"serial_number": 359810 RV64IMAC cycles + 35440 virtual instructions = 395250 total cycles
+"schnorr_verify": 504485 RV64IMAC cycles + 54152 virtual instructions = 558637 total cycles
+"output_record_1": 847413 RV64IMAC cycles + 80752 virtual instructions = 928165 total cycles
+"output_record_2": 846689 RV64IMAC cycles + 80896 virtual instructions = 927585 total cycles
+"transfer_total": 3037895 RV64IMAC cycles + 295800 virtual instructions = 3333695 total cycles
+"record_decrypt": 481987 RV64IMAC cycles + 44960 virtual instructions = 526947 total cycles
+"serial_number": 354929 RV64IMAC cycles + 34936 virtual instructions = 389865 total cycles
+"schnorr_verify": 522072 RV64IMAC cycles + 55640 virtual instructions = 577712 total cycles
+"merkle_proofs": 9532139 RV64IMAC cycles + 723520 virtual instructions = 10255659 total cycles
+"output_token_1": 822816 RV64IMAC cycles + 78160 virtual instructions = 900976 total cycles
+"output_token_2": 835093 RV64IMAC cycles + 79488 virtual instructions = 914581 total cycles
+"output_compliance": 907543 RV64IMAC cycles + 85488 virtual instructions = 993031 total cycles
+"usdcx_total": 13456681 RV64IMAC cycles + 1102192 virtual instructions = 14558873 total cycles
+"merkle_proofs_soft": 60425261 RV64IMAC cycles + 1116220 virtual instructions = 61541481 total cycles
+"usdcx_soft_total": 82837104 RV64IMAC cycles + 1418296 virtual instructions = 84255400 total cycles
+total trace length (cycles): 4095497
+trace length (cycles): 318873
+2026-08-17T18:29:36.955191Z  INFO jolt_prover_legacy::zkvm::prover: 288621 raw RISC-V instructions + 30252 virtual instructions = 318873 total cycles
+prover time: 2.87s  (111141 cycles/s)
+proof size: 86000 bytes
+verify time: 0.066s, valid: true
+4522622976  maximum resident set size
+```
+
