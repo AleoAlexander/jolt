@@ -5,9 +5,12 @@
 //! The guest passes its record blob as an `UntrustedAdvice<Vec<u8>>` input.
 //! Postcard frames a `Vec<u8>` in the committed region as
 //! `varint(len) ‖ bytes`, so the blob itself carries a deterministic head
-//! pad: `pad = 8 − varint_size(len)`, making the first record block start at
-//! **byte 8 = word 1 of the region, always**. [`init`] recomputes the pad
-//! rule from `len` alone and spoils on violation — the block base is
+//! pad: `pad = 128 − varint_size(len)`, making the first record block start
+//! at **byte 128 = region word 16, always** — a 16-word boundary, so record
+//! i's word j sits at region word `16·(i+1) + j` and the gadget's low-4-bit
+//! word indexing is exact. The header row (varint + pad zeros) trivially
+//! satisfies the gadget identity (y = z = w = 0). [`init`] recomputes the
+//! pad rule from `len` alone and spoils on violation — the block base is
 //! data-anchored, never a trusted offset. [`weld`] compares the 12 x/y/z
 //! words of the current block against the operand/result words the op
 //! actually used and spoils on mismatch (w is existential — never compared).
@@ -39,9 +42,10 @@ pub const fn varint_size(len: usize) -> usize {
     }
 }
 
-/// Head pad enforced inside the blob so blocks start at region byte 8.
+/// Head pad enforced inside the blob so blocks start at region byte 128
+/// (word 16 — a 16-word boundary; see module docs).
 pub const fn head_pad(len: usize) -> usize {
-    8 - varint_size(len)
+    RECORD_BYTES - varint_size(len)
 }
 
 #[cfg(feature = "field-accel-bind")]

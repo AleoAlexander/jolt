@@ -8,7 +8,7 @@ guest = []
 
 [dependencies]
 jolt = { package = "jolt-sdk", path = "../../../jolt-sdk" }
-jolt-inlines-edwards-bls12.workspace = true
+jolt-inlines-edwards-bls12 = { workspace = true, features = ["field-accel-bind"] }
 
 [lib]
 test = false
