@@ -80,7 +80,7 @@ fn bind_statement<T: Transcript>(params: &FieldAccelParams, log_n: usize, transc
 /// < 2^70; digits are < 4. All magnitudes in the batched constraint stay
 /// far below the BN254 Fr modulus (CARRY_BOUNDS.md), so the integer
 /// identity holds iff the field identity holds.
-fn witness_columns<F: JoltField>(witness: &FieldAccelWitness) -> Vec<Vec<F>> {
+pub(super) fn witness_columns<F: JoltField>(witness: &FieldAccelWitness) -> Vec<Vec<F>> {
     let mut cols: Vec<Vec<F>> = Vec::with_capacity(NUM_TOTAL_COLUMNS);
     for col in witness.words.iter() {
         cols.push(col.iter().map(|&v| F::from_u64(v)).collect());
@@ -97,7 +97,7 @@ fn witness_columns<F: JoltField>(witness: &FieldAccelWitness) -> Vec<Vec<F>> {
 /// eq table over the hypercube: table[idx] = Π_j (bit_j(idx) ? tau_j : 1−tau_j),
 /// little-endian bit/variable pairing; binding the low variable each round
 /// consumes tau[0], tau[1], ... in order, matching the verifier's product.
-fn eq_table<F: JoltField>(tau: &[F]) -> Vec<F> {
+pub(super) fn eq_table<F: JoltField>(tau: &[F]) -> Vec<F> {
     let mut table = vec![F::one()];
     for t in tau {
         let one_minus_t = F::one() - *t;
@@ -122,7 +122,7 @@ pub struct BatchingChallenges<F: JoltField> {
 }
 
 impl<F: JoltField> BatchingChallenges<F> {
-    fn draw<T: Transcript>(transcript: &mut T) -> Self {
+    pub(super) fn draw<T: Transcript>(transcript: &mut T) -> Self {
         let alpha: F = transcript.challenge_scalar();
         let gamma: F = transcript.challenge_scalar();
         let mut alpha_pows = [F::one(); 14];
@@ -143,7 +143,7 @@ impl<F: JoltField> BatchingChallenges<F> {
 }
 
 /// The batched row constraint at a single (possibly virtual) row.
-fn constraint_eval<F: JoltField>(
+pub(super) fn constraint_eval<F: JoltField>(
     vals: &[F],
     q_words: &[F; 4],
     ch: &BatchingChallenges<F>,
@@ -196,7 +196,7 @@ fn constraint_eval<F: JoltField>(
 }
 
 /// Bind the lowest variable of a multilinear column to r.
-fn bind_low<F: JoltField>(v: &mut Vec<F>, r: F) {
+pub(super) fn bind_low<F: JoltField>(v: &mut Vec<F>, r: F) {
     let half = v.len() / 2;
     for i in 0..half {
         let lo = v[2 * i];
@@ -205,34 +205,35 @@ fn bind_low<F: JoltField>(v: &mut Vec<F>, r: F) {
     v.truncate(half);
 }
 
-fn eval_unipoly<F: JoltField>(poly: &UniPoly<F>, r: F) -> F {
+pub(super) fn eval_unipoly<F: JoltField>(poly: &UniPoly<F>, r: F) -> F {
     poly.coeffs
         .iter()
         .rev()
         .fold(F::zero(), |acc, c| acc * r + *c)
 }
 
-pub fn prove_field_accel<F: JoltField, T: Transcript>(
-    witness: &FieldAccelWitness,
-    params: &FieldAccelParams,
+/// Prover core of the eq-weighted zero-check: consumes the columns (binding
+/// them in place), appends one degree-5 message per round, and returns the
+/// round polynomials plus the row challenges (in native challenge form,
+/// little-endian: challenge j binds row-index bit j).
+pub(super) fn zero_check_prove<F: JoltField, T: Transcript>(
+    cols: &mut [Vec<F>],
+    tau: &[F],
+    ch: &BatchingChallenges<F>,
+    q_words: &[F; 4],
     transcript: &mut T,
-) -> FieldAccelProof<F> {
-    let n = witness.padded_len();
+) -> (Vec<UniPoly<F>>, Vec<F::Challenge>) {
+    let n = cols[0].len();
     debug_assert!(n.is_power_of_two());
     let log_n = n.trailing_zeros() as usize;
-
-    bind_statement(params, log_n, transcript);
-    let tau: Vec<F> = transcript.challenge_vector(log_n);
-    let ch = BatchingChallenges::draw(transcript);
-    let q_words = params.modulus_limbs.map(F::from_u64);
-
-    let mut cols = witness_columns::<F>(witness);
-    let mut eq = eq_table::<F>(&tau);
+    let mut eq = eq_table::<F>(tau);
 
     let mut round_polys = Vec::with_capacity(log_n);
+    let mut r_challenges = Vec::with_capacity(log_n);
     let mut m = n;
-    let mut cur = vec![F::zero(); NUM_TOTAL_COLUMNS];
-    let mut diff = vec![F::zero(); NUM_TOTAL_COLUMNS];
+    let num_cols = cols.len();
+    let mut cur = vec![F::zero(); num_cols];
+    let mut diff = vec![F::zero(); num_cols];
     for _round in 0..log_n {
         m /= 2;
         // Degree-5 message: evaluate Σ_i eq(t, i) · C(t, i) at t = 0..5
@@ -260,13 +261,72 @@ pub fn prove_field_accel<F: JoltField, T: Transcript>(
         let poly = UniPoly::from_evals(&evals);
         // Conventional order: message appended, then challenge drawn.
         transcript.append_scalars(b"fa_round_poly", &poly.coeffs);
-        let r: F = transcript.challenge_scalar();
+        let r_c: F::Challenge = transcript.challenge_scalar_optimized::<F>();
+        let r: F = r_c.into();
         for col in cols.iter_mut() {
             bind_low(col, r);
         }
         bind_low(&mut eq, r);
         round_polys.push(poly);
+        r_challenges.push(r_c);
     }
+    (round_polys, r_challenges)
+}
+
+/// Verifier core of the zero-check: replays the rounds, returning the row
+/// challenges and the running claim to be checked against
+/// eq(τ, r) · constraint(final evals).
+pub(super) fn zero_check_verify<F: JoltField, T: Transcript>(
+    round_polys: &[UniPoly<F>],
+    log_rows: usize,
+    transcript: &mut T,
+) -> Result<(Vec<F::Challenge>, F), &'static str> {
+    if round_polys.len() != log_rows {
+        return Err("wrong number of sumcheck rounds");
+    }
+    // Standard sumcheck recurrence: claim_0 = 0 (zero-check);
+    // g_j(0) + g_j(1) == claim_j; claim_{j+1} = g_j(r_j).
+    let mut claim = F::zero();
+    let mut r_vec = Vec::with_capacity(log_rows);
+    for poly in round_polys {
+        if poly.coeffs.is_empty() || poly.coeffs.len() > DEGREE + 1 {
+            return Err("round polynomial has wrong degree");
+        }
+        if poly.eval_at_zero() + poly.eval_at_one() != claim {
+            return Err("sumcheck round claim mismatch");
+        }
+        transcript.append_scalars(b"fa_round_poly", &poly.coeffs);
+        let r_c: F::Challenge = transcript.challenge_scalar_optimized::<F>();
+        claim = eval_unipoly(poly, r_c.into());
+        r_vec.push(r_c);
+    }
+    Ok((r_vec, claim))
+}
+
+/// eq(τ, r) for little-endian challenge lists.
+pub(super) fn eq_at<F: JoltField>(tau: &[F], r: &[F::Challenge]) -> F {
+    tau.iter().zip(r.iter()).fold(F::one(), |acc, (t, r)| {
+        let r: F = (*r).into();
+        acc * (*t * r + (F::one() - *t) * (F::one() - r))
+    })
+}
+
+pub fn prove_field_accel<F: JoltField, T: Transcript>(
+    witness: &FieldAccelWitness,
+    params: &FieldAccelParams,
+    transcript: &mut T,
+) -> FieldAccelProof<F> {
+    let n = witness.padded_len();
+    debug_assert!(n.is_power_of_two());
+    let log_n = n.trailing_zeros() as usize;
+
+    bind_statement(params, log_n, transcript);
+    let tau: Vec<F> = transcript.challenge_vector(log_n);
+    let ch = BatchingChallenges::draw(transcript);
+    let q_words = params.modulus_limbs.map(F::from_u64);
+
+    let mut cols = witness_columns::<F>(witness);
+    let (round_polys, _r) = zero_check_prove(&mut cols, &tau, &ch, &q_words, transcript);
 
     let columns: Vec<F> = cols.iter().map(|col| col[0]).collect();
     FieldAccelProof {
@@ -287,34 +347,14 @@ pub fn verify_field_accel<F: JoltField, T: Transcript>(
     let tau: Vec<F> = transcript.challenge_vector(log_num_rows);
     let ch = BatchingChallenges::draw(transcript);
 
-    if proof.round_polys.len() != log_num_rows {
-        return Err("wrong number of sumcheck rounds");
-    }
     if proof.final_evals.columns.len() != NUM_TOTAL_COLUMNS {
         return Err("wrong number of final column evaluations");
     }
 
-    // Standard sumcheck recurrence: claim_0 = 0 (zero-check);
-    // g_j(0) + g_j(1) == claim_j; claim_{j+1} = g_j(r_j).
-    let mut claim = F::zero();
-    let mut r_vec = Vec::with_capacity(log_num_rows);
-    for poly in &proof.round_polys {
-        if poly.coeffs.is_empty() || poly.coeffs.len() > DEGREE + 1 {
-            return Err("round polynomial has wrong degree");
-        }
-        if poly.eval_at_zero() + poly.eval_at_one() != claim {
-            return Err("sumcheck round claim mismatch");
-        }
-        transcript.append_scalars(b"fa_round_poly", &poly.coeffs);
-        let r: F = transcript.challenge_scalar();
-        claim = eval_unipoly(poly, r);
-        r_vec.push(r);
-    }
+    let (r_vec, claim) = zero_check_verify(&proof.round_polys, log_num_rows, transcript)?;
 
     // The verifier computes eq(tau, r) itself.
-    let eq_eval = tau.iter().zip(r_vec.iter()).fold(F::one(), |acc, (t, r)| {
-        acc * (*t * *r + (F::one() - *t) * (F::one() - *r))
-    });
+    let eq_eval = eq_at(&tau, &r_vec);
 
     let q_words = params.modulus_limbs.map(F::from_u64);
     let c = constraint_eval(&proof.final_evals.columns, &q_words, &ch);

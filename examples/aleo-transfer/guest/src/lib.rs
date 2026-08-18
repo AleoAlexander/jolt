@@ -112,8 +112,7 @@ fn poseidon_hash_bench(input: u64) -> [u64; 4] {
 
 // Small provable workload: 1 full-width scalar mult + 1 Poseidon perm, for
 // end-to-end prover throughput measurement.
-#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 2097152)]
-fn mult_bench(seed: u64) -> u64 {
+fn mult_bench_body(seed: u64) -> u64 {
     let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
     let g = EdwardsPoint::generator();
 
@@ -121,6 +120,21 @@ fn mult_bench(seed: u64) -> u64 {
     let mut state = [Fq::from_canonical(px), Fq::from_canonical(py), Fq::from_u64(2)];
     poseidon_perm(&mut state);
     state[0].add(&state[1]).to_canonical()[0]
+}
+
+#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 2097152)]
+fn mult_bench(seed: u64) -> u64 {
+    mult_bench_body(seed)
+}
+
+/// B2 bound variant: every field op welded to its record block in the
+/// committed untrusted-advice region.
+#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 2097152, max_untrusted_advice_size = 1048576)]
+fn mult_bench_bound(seed: u64, records: jolt::UntrustedAdvice<&[u8]>) -> u64 {
+    jolt_inlines_edwards_bls12::bind::init(&records);
+    let out = mult_bench_body(seed);
+    jolt_inlines_edwards_bls12::bind::finalize();
+    out
 }
 
 #[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 67108864)]
@@ -288,8 +302,7 @@ fn merkle_verify_16(leaf: Fq, s: &mut u64) -> Fq {
     node
 }
 
-#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 67108864)]
-fn usdcx_transfer_private(seed: u64) -> u64 {
+fn usdcx_transfer_private_body(seed: u64) -> u64 {
     let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
     let g = EdwardsPoint::generator();
     let pk = g.scalar_mul(&full_scalar(&mut s));
@@ -485,6 +498,22 @@ fn merkle_verify_16_soft(leaf: AFq, s: &mut u64) -> AFq {
         };
     }
     node
+}
+
+#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 67108864)]
+fn usdcx_transfer_private(seed: u64) -> u64 {
+    usdcx_transfer_private_body(seed)
+}
+
+/// B2 bound variant: every field op welded to its record block in the
+/// committed untrusted-advice region (32 MB capacity for the 146,766-record
+/// blob).
+#[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 67108864, max_untrusted_advice_size = 33554432)]
+fn usdcx_transfer_private_bound(seed: u64, records: jolt::UntrustedAdvice<&[u8]>) -> u64 {
+    jolt_inlines_edwards_bls12::bind::init(&records);
+    let out = usdcx_transfer_private_body(seed);
+    jolt_inlines_edwards_bls12::bind::finalize();
+    out
 }
 
 #[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 134217728)]

@@ -126,7 +126,7 @@ pub fn main() {
     let (output_b, proof_b, io_b) = prove_b(seed, jolt_sdk::UntrustedAdvice::new(blob.as_slice()));
     println!("bound prover time: {:.2}s", now.elapsed().as_secs_f64());
     assert_eq!(output_b, expected_chain(seed), "bound output mismatch");
-    let bound_valid = verify_b(seed, output_b, io_b.panic, proof_b);
+    let bound_valid = verify_b(seed, output_b, io_b.panic, proof_b.clone());
     assert!(bound_valid, "B2 WELD GATE FAILED: honest bound proof did not verify");
     println!("B2 weld gate PASSED: bound chain proves and verifies with honest blob");
 
@@ -136,7 +136,7 @@ pub fn main() {
     tampered[pad] ^= 1;
     let mut program_neg = guest::compile_fqmul_chain_bound(target_dir);
     let _ = guest::preprocess_shared_fqmul_chain_bound(&mut program_neg);
-    let prove_neg = guest::build_prover_fqmul_chain_bound(program_neg, prover_pp_b);
+    let prove_neg = guest::build_prover_fqmul_chain_bound(program_neg, prover_pp_b.clone());
     let neg = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let (o, p, io) = prove_neg(seed, jolt_sdk::UntrustedAdvice::new(tampered.as_slice()));
         verify_b(seed, o, io.panic, p)
@@ -146,4 +146,86 @@ pub fn main() {
         Ok(false) => println!("B2 weld negative PASSED: tampered blob rejected by verifier"),
         Err(_) => println!("B2 weld negative PASSED: tampered blob spoiled the trace (prover abort)"),
     }
+
+    // B2 BOUND GATE: the sidecar gadget proof — modular identity over the
+    // SAME committed advice region the welds bind to, with Dory-bound
+    // evaluations, digit range checks, and the header-derived record count.
+    println!("\n=== B2 bound gate ===");
+    use jolt_prover_legacy::zkvm::field_accel::bound::{
+        prove_field_accel_bound, verify_field_accel_bound,
+    };
+    use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
+
+    const MAX_ADVICE: usize = 262144; // fqmul_chain_bound's max_untrusted_advice_size
+
+    // the exact bytes the prover pipeline serialized into the advice region
+    let advice_bytes =
+        jolt_sdk::postcard::to_stdvec(&jolt_sdk::UntrustedAdvice::new(blob.as_slice()))
+            .expect("advice serialization");
+
+    let setup = &prover_pp_b.generators;
+    let verifier_setup = jolt_sdk::PCS::setup_verifier(setup);
+
+    let now = std::time::Instant::now();
+    let mut pt = jolt_prover_legacy::transcripts::Blake2bTranscript::new(b"field_accel_bound");
+    let bound_proof = prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+        &advice_bytes,
+        MAX_ADVICE,
+        &params,
+        setup,
+        &mut pt,
+    )
+    .expect("bound gadget proving failed");
+    println!("bound gadget prover time: {:.3}s", now.elapsed().as_secs_f64());
+
+    // Recompute the advice commitment and require it to EQUAL the one the
+    // main proof carries — the bridge that welds sidecar to main proof.
+    let (advice_commitment, _) = jolt_prover_legacy::zkvm::field_accel::bound::commit_advice_region::<
+        jolt_sdk::F,
+        jolt_sdk::PCS,
+    >(&advice_bytes, MAX_ADVICE, setup);
+    let recomputed_vc =
+        <jolt_sdk::PCS as jolt_sdk::ProofCommitmentScheme<jolt_sdk::F>>::commitment_into_verifier(
+            advice_commitment.clone(),
+        );
+    assert_eq!(
+        Some(recomputed_vc),
+        proof_b.untrusted_advice_commitment,
+        "B2 BOUND GATE FAILED: sidecar advice commitment differs from the main proof's"
+    );
+    println!("advice commitment matches the main proof's untrusted_advice_commitment");
+
+    let now = std::time::Instant::now();
+    let mut vt = jolt_prover_legacy::transcripts::Blake2bTranscript::new(b"field_accel_bound");
+    verify_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+        &bound_proof,
+        &advice_commitment,
+        MAX_ADVICE,
+        &params,
+        &verifier_setup,
+        &mut vt,
+    )
+    .expect("B2 BOUND GATE FAILED: bound gadget proof did not verify");
+    println!(
+        "B2 bound gate PASSED: gadget verifies against the committed region in {:.4}s",
+        now.elapsed().as_secs_f64()
+    );
+
+    // negative: a tampered corner evaluation must fail
+    let mut bad = bound_proof.clone();
+    bad.aux_corner_evals[7] += <jolt_sdk::F as jolt_prover_legacy::field::JoltField>::from_u64(1);
+    let mut vt = jolt_prover_legacy::transcripts::Blake2bTranscript::new(b"field_accel_bound");
+    assert!(
+        verify_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+            &bad,
+            &advice_commitment,
+            MAX_ADVICE,
+            &params,
+            &verifier_setup,
+            &mut vt,
+        )
+        .is_err(),
+        "B2 BOUND NEGATIVE FAILED: tampered corner eval verified"
+    );
+    println!("B2 bound negative PASSED: tampered corner evaluation rejected");
 }

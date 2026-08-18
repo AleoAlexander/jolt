@@ -14,6 +14,11 @@
 #[cfg(any(test, feature = "field-accel-prototype"))]
 pub mod sumcheck;
 
+/// B2 bound gadget: the zero-check with commitment-bound evaluations
+/// (advice-region words + committed aux columns).
+#[cfg(any(test, feature = "field-accel-prototype"))]
+pub mod bound;
+
 use num_bigint::BigUint;
 
 /// Guest-declared modulus. Not hardcoded to any curve.
