@@ -40,6 +40,15 @@ pub fn main() {
     assert_eq!(pass1_records.len(), 1000, "pass-1 log should hold the chain's ops");
     let blob =
         jolt_inlines_edwards_bls12::sequence_builder::build_record_blob_padded(&pass1_records);
+    let bound_summary =
+        guest::analyze_fqmul_chain_bound(seed, jolt_sdk::UntrustedAdvice::new(blob.as_slice()));
+    let bound_cycles = bound_summary.trace_len();
+    println!(
+        "fqmul_chain_bound: {bound_cycles} cycles ({} cycles/op incl. weld, +{} vs unbound)",
+        bound_cycles / 1000,
+        (bound_cycles - cycles) / 1000
+    );
+    let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
 
     // PROTOTYPE: unsound until B1 — the advice results are not yet bound by
     // any verification; this prove/verify only exercises the pipeline shape.

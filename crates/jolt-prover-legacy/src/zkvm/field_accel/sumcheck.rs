@@ -232,40 +232,54 @@ pub(super) fn zero_check_prove<F: JoltField, T: Transcript>(
     let mut r_challenges = Vec::with_capacity(log_n);
     let mut m = n;
     let num_cols = cols.len();
-    let mut cur = vec![F::zero(); num_cols];
-    let mut diff = vec![F::zero(); num_cols];
     for _round in 0..log_n {
         m /= 2;
         // Degree-5 message: evaluate Σ_i eq(t, i) · C(t, i) at t = 0..5
-        // over the remaining hypercube. O(6 · 233 · m) per round — prototype.
-        let mut evals = [F::zero(); DEGREE + 1];
-        for i in 0..m {
-            for ((cur_c, diff_c), col) in cur.iter_mut().zip(diff.iter_mut()).zip(cols.iter()) {
-                let lo = col[2 * i];
-                *cur_c = lo;
-                *diff_c = col[2 * i + 1] - lo;
-            }
-            let eq_lo = eq[2 * i];
-            let eq_diff = eq[2 * i + 1] - eq_lo;
-            let mut eq_cur = eq_lo;
-            for (t, eval) in evals.iter_mut().enumerate() {
-                *eval += eq_cur * constraint_eval(&cur, &q_words, &ch);
-                if t < DEGREE {
-                    for (cur_c, diff_c) in cur.iter_mut().zip(diff.iter()) {
-                        *cur_c += *diff_c;
+        // over the remaining hypercube. Row-parallel; O(6 · 233 · m) work.
+        use rayon::prelude::*;
+        let evals = (0..m)
+            .into_par_iter()
+            .fold(
+                || (vec![F::zero(); num_cols], vec![F::zero(); num_cols], [F::zero(); DEGREE + 1]),
+                |(mut cur, mut diff, mut acc), i| {
+                    for ((cur_c, diff_c), col) in
+                        cur.iter_mut().zip(diff.iter_mut()).zip(cols.iter())
+                    {
+                        let lo = col[2 * i];
+                        *cur_c = lo;
+                        *diff_c = col[2 * i + 1] - lo;
                     }
-                    eq_cur += eq_diff;
-                }
-            }
-        }
+                    let eq_lo = eq[2 * i];
+                    let eq_diff = eq[2 * i + 1] - eq_lo;
+                    let mut eq_cur = eq_lo;
+                    for (t, eval) in acc.iter_mut().enumerate() {
+                        *eval += eq_cur * constraint_eval(&cur, q_words, ch);
+                        if t < DEGREE {
+                            for (cur_c, diff_c) in cur.iter_mut().zip(diff.iter()) {
+                                *cur_c += *diff_c;
+                            }
+                            eq_cur += eq_diff;
+                        }
+                    }
+                    (cur, diff, acc)
+                },
+            )
+            .map(|(_, _, acc)| acc)
+            .reduce(
+                || [F::zero(); DEGREE + 1],
+                |mut a, b| {
+                    for (x, y) in a.iter_mut().zip(b.iter()) {
+                        *x += *y;
+                    }
+                    a
+                },
+            );
         let poly = UniPoly::from_evals(&evals);
         // Conventional order: message appended, then challenge drawn.
         transcript.append_scalars(b"fa_round_poly", &poly.coeffs);
         let r_c: F::Challenge = transcript.challenge_scalar_optimized::<F>();
         let r: F = r_c.into();
-        for col in cols.iter_mut() {
-            bind_low(col, r);
-        }
+        cols.par_iter_mut().for_each(|col| bind_low(col, r));
         bind_low(&mut eq, r);
         round_polys.push(poly);
         r_challenges.push(r_c);
@@ -480,8 +494,7 @@ mod tests {
             witness.digits[j * DIGITS_PER_CARRY + 1][row] = 1;
         }
         witness.digits[j * DIGITS_PER_CARRY][row] = d0 + 4;
-        witness.digits[j * DIGITS_PER_CARRY + 1][row] =
-            witness.digits[j * DIGITS_PER_CARRY + 1][row] - 1;
+        witness.digits[j * DIGITS_PER_CARRY + 1][row] -= 1;
         // recomposition unchanged: +4·4^0 − 1·4^1 = 0; digit 0 is now ≥ 4
         let proof = prove(&witness);
         assert!(verify(&proof, 3).is_err(), "out-of-range digit must fail");

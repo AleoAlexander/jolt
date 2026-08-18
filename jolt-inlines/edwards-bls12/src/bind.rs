@@ -52,58 +52,53 @@ pub const fn head_pad(len: usize) -> usize {
 mod active {
     use super::{head_pad, RECORD_BYTES};
 
+    const RECORD_WORDS: usize = RECORD_BYTES / 8;
+
     // Guest execution is single-threaded; these statics are only ever
-    // accessed sequentially.
-    static mut BLOCKS: *const u8 = core::ptr::null();
-    static mut LEN: usize = 0;
+    // accessed sequentially. Word-typed: the pad rule puts block 0 at
+    // region byte 128 and the region base is 8-aligned, so aligned u64
+    // loads are valid — 12 LDs per weld instead of ~100 byte ops.
+    static mut BLOCKS: *const u64 = core::ptr::null();
+    static mut LEN_WORDS: usize = 0;
     static mut CURSOR: usize = 0;
 
-    /// Register the record blob (the full deserialized `Vec<u8>`, pad
-    /// included). Spoils unless `blob.len()` satisfies the pad rule.
+    /// Register the record blob (the full deserialized `&[u8]`, pad
+    /// included). Spoils unless `blob.len()` satisfies the pad rule and
+    /// the block base is 8-aligned.
     pub fn init(blob: &[u8]) {
         let pad = head_pad(blob.len());
         if blob.len() < pad || !(blob.len() - pad).is_multiple_of(RECORD_BYTES) {
             jolt_inlines_sdk::spoil_proof();
         }
+        let base = unsafe { blob.as_ptr().add(pad) };
+        if !(base as usize).is_multiple_of(8) {
+            jolt_inlines_sdk::spoil_proof();
+        }
         unsafe {
-            BLOCKS = blob.as_ptr().add(pad);
-            LEN = blob.len() - pad;
+            BLOCKS = base as *const u64;
+            LEN_WORDS = (blob.len() - pad) / 8;
             CURSOR = 0;
         }
-    }
-
-    #[inline(always)]
-    fn block_word(base: *const u8, word_idx: usize) -> u64 {
-        let mut bytes = [0u8; 8];
-        unsafe {
-            core::ptr::copy_nonoverlapping(base.add(word_idx * 8), bytes.as_mut_ptr(), 8);
-        }
-        u64::from_le_bytes(bytes)
     }
 
     /// Compare (x, y, z) against the current block; advance the cursor.
     /// No-op before `init`.
     #[inline(always)]
     pub fn weld(x: &[u64; 4], y: &[u64; 4], z: &[u64; 4]) {
-        let base = unsafe {
+        unsafe {
             if BLOCKS.is_null() {
                 return;
             }
-            if CURSOR + RECORD_BYTES > LEN {
+            if CURSOR + RECORD_WORDS > LEN_WORDS {
                 jolt_inlines_sdk::spoil_proof();
             }
-            BLOCKS.add(CURSOR)
-        };
-        for i in 0..4 {
-            if block_word(base, i) != x[i]
-                || block_word(base, 4 + i) != y[i]
-                || block_word(base, 8 + i) != z[i]
-            {
-                jolt_inlines_sdk::spoil_proof();
+            let b = BLOCKS.add(CURSOR);
+            for i in 0..4 {
+                if *b.add(i) != x[i] || *b.add(4 + i) != y[i] || *b.add(8 + i) != z[i] {
+                    jolt_inlines_sdk::spoil_proof();
+                }
             }
-        }
-        unsafe {
-            CURSOR += RECORD_BYTES;
+            CURSOR += RECORD_WORDS;
         }
     }
 
@@ -114,7 +109,7 @@ mod active {
             if BLOCKS.is_null() {
                 return;
             }
-            if CURSOR != LEN {
+            if CURSOR != LEN_WORDS {
                 jolt_inlines_sdk::spoil_proof();
             }
         }
@@ -122,7 +117,7 @@ mod active {
 
     /// Number of blocks welded so far (guest-side sanity/debug).
     pub fn welded_count() -> usize {
-        unsafe { CURSOR / RECORD_BYTES }
+        unsafe { CURSOR / RECORD_WORDS }
     }
 }
 

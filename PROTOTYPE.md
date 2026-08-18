@@ -9,10 +9,57 @@ re-run green and numbers re-measured (see RESULTS.md `rebase-20260817`).
 - B0: advice-only field ops (jolt-inlines/edwards-bls12): 41 cyc/op vs 252
   software; Aleo transfer_private model 17.59M → 3.09M cycles (5.7x).
 - B1: batched non-native-mul sumcheck (crates/jolt-prover-legacy/src/zkvm/
-  field_accel/): 46K-op transfer log proved in 0.179s, verified <0.1ms;
-  tamper tests reject corrupted logs; muldiv regression green.
+  field_accel/) — superseded by the B2 schema below.
+- **B2 (2026-08-18): the SOUND, fully bound gadget.** Guest welds every op
+  to its 16-word record block in the committed untrusted-advice region
+  (bind.rs; tampered blob ⇒ main proof fails); the gadget proves the
+  64-bit-word identity with committed offset carries + 2-bit digit range
+  checks, Dory-bound evaluations, and a header-anchored record count
+  (bound.rs). Measured: fqmul 85 cyc/op bound (vs 45 unbound / 252
+  software); usdcx 20.23M cycles bound vs 84.26M software (4.2x; 5.8x
+  unbound); bound gadget proves the 46,056-op log in 10.7s, verifies in
+  0.14s; mult_bench bound end-to-end (welds + sidecar + commitment
+  equality) passes. Composition is a sidecar sharing the main proof's
+  advice commitment object — in-pipeline integration is upstream's call
+  (RFC question 2).
 
-## Deliberately unsound / incomplete (the `// PROTOTYPE:` inventory)
+## B2 status (2026-08-18): the binding gaps are CLOSED
+
+The original unsoundness inventory (kept below for history) is resolved by
+the B2 bound design (`field_accel/bound.rs`, `jolt-inlines/edwards-bls12/
+src/bind.rs`, spec Rev 3):
+
+1. **Advice results bound**: every field op's (x, y, z) words are welded
+   in-circuit (`bind::weld` + `spoil_proof`) to the op's 16-word record
+   block in the committed untrusted-advice region; `bind::finalize`
+   forbids unwelded tails. Tampered blob ⇒ the MAIN proof fails
+   (fqmul-test weld gate, negative verified).
+2. **PCS binding**: the gadget's word evaluations are openings of the
+   committed `UntrustedAdvice` polynomial; carries/digits are committed
+   as one aux polynomial; corner claims collapse to single Dory openings
+   via random-point interpolation. No clear final evals remain in the
+   bound path.
+3. **Range checks**: carries are committed in offset form and
+   range-checked by 2-bit-digit columns (validity + recomposition
+   constraint families); word ranges are inherited from the committed
+   region's byte construction and the RAM-checked weld.
+4. Invocation log (host thread-local) is now pass-1 tooling only — the
+   proof's witness source is the committed region, never the log.
+5. **Transcript ordering**: both commitments are absorbed before τ/α/γ.
+6. **Counts**: the record count is derived from the region's own header
+   word (opened at the all-zero point) under the same pad rule the guest
+   enforces — no trusted num_records/log_n/offsets.
+7. Division b = 0 cannot reach the gadget: the guest spoils on
+   division-by-zero before welding (sdk.rs), so no valid proof contains
+   a zero-divisor record.
+
+Still open, explicitly: non-ZK only (no BlindFold sync), no Akita path,
+and the SIDECAR COMPOSITION — the gadget proof shares the main proof's
+advice commitment object but not its transcript; in-pipeline integration
+(shared transcript, stage-8 batched openings) is upstream's design call
+(RFC question 2). Guest-side canonicity posture unchanged (below).
+
+## Historical inventory (pre-B2, resolved as described above)
 1. Advice results are unbound in the main proof (B0 ops verify nothing
    in-trace); binding = the gadget, which is a *side proof* here.
 2. Gadget final evals are sent in the clear — no PCS commitment binding.
@@ -44,7 +91,9 @@ Distinct from the protocol-design requirements above — these are code-level:
   RESULTS.md counts (verified: usdcx/credits = 3.19× matches the 3.2× op
   ratio; no double-count), but drain-ordering is fragile and a future
   worker-thread tracer would silently under-log. Fix = thread the log through
-  ProgramSummary, not a thread_local!.
+  ProgramSummary, not a thread_local!. B2 note: the log is now pass-1
+  blob-building tooling only — proof soundness no longer depends on it
+  (an under-logged blob simply fails the weld, spoiling the proof).
 - **FieldOpRecord::new panics** on malformed logs (assert/expect): fine for an
   honest tracer, a DoS vector for any service building witnesses from
   untrusted logs. Fix = return Result before service use.
@@ -66,6 +115,11 @@ are the prototype-side design manifestations, the list here is the code-side.
 - Numbers: `PATH="$PWD/target/release:$PATH" ./scripts/aleo-scorecard.sh <label>`
   and `cargo run --release -p fqmul-test` (B1 gate at the end).
 - Tests: `cargo nextest run -p jolt-inlines-edwards-bls12 --features host`
-  and `cargo nextest run -p jolt-prover-legacy field_accel --features host`.
+  and `cargo nextest run -p jolt-prover-legacy field_accel --features host`
+  (includes the B2 bound roundtrip + negative suite: tampered corners,
+  forged header count, wrong commitment, false record).
+- B2 e2e gates: `cargo run --release -p fqmul-test` (weld gate + bound
+  gate + negatives) and the aleo-transfer run (usdcx bound cycles,
+  transfer-scale bound gadget, mult_bench bound e2e).
 - History: examples/aleo-transfer/{RESULTS.md,FINDINGS.md}; Phase 0 verified
   sequences at tag `phase0-complete`.

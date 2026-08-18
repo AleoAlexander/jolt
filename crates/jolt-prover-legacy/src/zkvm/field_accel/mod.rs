@@ -163,7 +163,8 @@ impl FieldAccelWitness {
         let n = records.len().max(1).next_power_of_two();
         let mut words: [Vec<u64>; 16] = Default::default();
         let mut carries: [Vec<u128>; NUM_CARRIES] = Default::default();
-        let mut digits: Vec<Vec<u8>> = vec![Vec::with_capacity(n); NUM_DIGIT_COLUMNS];
+        let mut digits: Vec<Vec<u8>> =
+            (0..NUM_DIGIT_COLUMNS).map(|_| Vec::with_capacity(n)).collect();
         for col in words.iter_mut() {
             col.reserve(n);
         }

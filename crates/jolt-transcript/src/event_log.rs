@@ -8,7 +8,6 @@
 //! event-level wire map of a prover/verifier run; disabled (and free apart
 //! from one branch) when the variable is unset.
 
-use std::fmt::Write as _;
 use std::io::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -47,26 +46,32 @@ pub(crate) fn next_instance() -> u64 {
 /// `payload_digest` is a collision-resistant digest of the FULL payload
 /// (computed by the caller with its own hash type), so stream-symmetry
 /// comparisons establish byte identity, not 64-byte-prefix equality.
+#[expect(
+    clippy::format_collect,
+    reason = "opt-in diagnostics logger; clarity over the write!-fold idiom"
+)]
 pub(crate) fn record(instance: u64, kind: &str, payload: &[u8], payload_digest: &[u8]) {
     let Some(file) = log_file() else { return };
     let seq = SEQ_COUNTER.fetch_add(1, Ordering::Relaxed);
     let caller = caller_frame();
     let prefix_len = payload.len().min(PREFIX_LEN);
-    let mut hex = String::with_capacity(prefix_len * 2);
-    for byte in &payload[..prefix_len] {
-        let _ = write!(hex, "{byte:02x}");
-    }
-    let mut digest_hex = String::with_capacity(payload_digest.len() * 2);
-    for byte in payload_digest {
-        let _ = write!(digest_hex, "{byte:02x}");
-    }
+    let hex: String = payload
+        .iter()
+        .take(prefix_len)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let digest_hex: String = payload_digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     let line = format!(
         "{{\"seq\":{seq},\"inst\":{instance},\"kind\":\"{kind}\",\"len\":{},\"data\":\"{hex}\",\"digest\":\"{digest_hex}\",\"caller\":\"{}\"}}\n",
         payload.len(),
         caller.replace('\\', "/").replace('"', "'"),
     );
     if let Ok(mut file) = file.lock() {
-        let _ = file.write_all(line.as_bytes());
+        // best-effort: the event log is opt-in diagnostics
+        drop(file.write_all(line.as_bytes()));
     }
 }
 
@@ -95,8 +100,12 @@ fn caller_frame() -> String {
         // Strip the column suffix; keep path:line.
         let path = path.trim_end();
         return match path.rfind(':') {
-            Some(idx) if path[idx + 1..].chars().all(|c| c.is_ascii_digit()) => {
-                path[..idx].to_string()
+            Some(idx)
+                if path
+                    .get(idx + 1..)
+                    .is_some_and(|s| s.chars().all(|c| c.is_ascii_digit())) =>
+            {
+                path.get(..idx).unwrap_or(path).to_string()
             }
             _ => path.to_string(),
         };

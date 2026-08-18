@@ -32,7 +32,7 @@ use super::{FieldAccelParams, FieldAccelWitness, FieldOpRecord, NUM_CARRIES, NUM
 use crate::field::JoltField;
 use crate::poly::commitment::commitment_scheme::CommitmentScheme;
 use crate::poly::commitment::dory::{DoryContext, DoryGlobals};
-use crate::poly::multilinear_polynomial::{MultilinearPolynomial, PolynomialEvaluation};
+use crate::poly::multilinear_polynomial::MultilinearPolynomial;
 use crate::poly::unipoly::UniPoly;
 use crate::transcripts::Transcript;
 
@@ -167,8 +167,16 @@ pub fn region_words(advice_bytes: &[u8], max_untrusted_advice_size: usize) -> Ve
 fn pcs_pool() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
+        // 2 threads: inside this pool the vendored MSM sees
+        // current_num_threads()/2 = 1 chunk per call, so it churns ONE
+        // short-lived chunk pool per row-MSM instead of several concurrent
+        // ones — rayon pool drops don't join their threads, and at 2^24
+        // commitment scale the faster churn outruns thread reaping and hits
+        // the OS thread cap (EAGAIN). 64 MB stacks: Dory/MSM internals
+        // overflow rayon's default 2 MB workers at this scale.
         rayon::ThreadPoolBuilder::new()
             .num_threads(2)
+            .stack_size(64 * 1024 * 1024)
             .build()
             .expect("field-accel PCS pool")
     })

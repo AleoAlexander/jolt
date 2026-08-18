@@ -15,7 +15,7 @@ OUT=$(PATH="$PWD/target/release:$PATH" /usr/bin/time -l ./target/release/aleo-tr
 {
   echo "## ${LABEL} — $(date +%Y-%m-%d) — $(git rev-parse --short HEAD)${FEATURES:+ — features: $FEATURES}"
   echo '```'
-  echo "$OUT" | grep -E 'total cycles|trace length|prover time|proof size|verify time|maximum resident' \
+  echo "$OUT" | grep -E 'total cycles|trace length|prover time|proof size|verify time|maximum resident|_bound trace|BOUND gadget|bound sidecar|welded|BOUND gate' \
     | sed -E 's/^[[:space:]]*//; s/\x1b\[[0-9;]*m//g' | sed -E 's/^[0-9TZ:.-]+ +INFO +trace: tracer::emulator::cpu: //'
   echo '```'
   echo
