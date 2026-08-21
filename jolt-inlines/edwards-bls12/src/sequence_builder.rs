@@ -81,24 +81,13 @@ pub fn record_from_xyz(x: [u64; 4], y: [u64; 4], z: [u64; 4]) -> LoggedRecord {
     (x, y, z, w)
 }
 
-/// Flatten records into the committed advice-region layout: one 16-word
-/// block `[x0..3, y0..3, z0..3, w0..3]` per record, in op order.
-pub fn build_record_blob(records: &[LoggedRecord]) -> Vec<u64> {
-    let mut blob = Vec::with_capacity(records.len() * 16);
-    for (x, y, z, w) in records {
-        blob.extend_from_slice(x);
-        blob.extend_from_slice(y);
-        blob.extend_from_slice(z);
-        blob.extend_from_slice(w);
-    }
-    blob
-}
-
-/// Padded byte blob for the `UntrustedAdvice<Vec<u8>>` guest input: a head
-/// pad of `8 − varint_size(total_len)` zero bytes, then the 128-byte blocks,
-/// so postcard's length prefix plus the pad total exactly 8 bytes and every
-/// block lands word-aligned starting at region word 1. The guest re-verifies
-/// the pad rule from `len` alone (`bind::init`) — no trusted offsets.
+/// Padded byte blob for the guest's untrusted-advice input: a head pad of
+/// `128 − varint_size(total_len)` zero bytes, then the 128-byte record
+/// blocks, so postcard's length prefix plus the pad total exactly 128 bytes
+/// and every block lands on a 16-word boundary starting at region word 16
+/// (`bind::head_pad` is the shared rule). The guest re-verifies the rule
+/// from `len` alone and spoils on violation (`bind::init`) — no trusted
+/// offsets.
 pub fn build_record_blob_padded(records: &[LoggedRecord]) -> Vec<u8> {
     let blocks = records.len() * crate::bind::RECORD_BYTES;
     let mut pad = crate::bind::head_pad(blocks + 8);
@@ -126,7 +115,8 @@ fn log_record(x: Fq, y: Fq, z: Fq) {
 }
 
 /// Test-only entry to the log path (same derivation as `log_record`).
-pub fn log_record_for_test(x: [u64; 4], y: [u64; 4], z: [u64; 4]) {
+#[cfg(test)]
+pub(crate) fn log_record_for_test(x: [u64; 4], y: [u64; 4], z: [u64; 4]) {
     let record = record_from_xyz(x, y, z);
     FIELD_OP_LOG.with(|log| log.borrow_mut().push(record));
 }

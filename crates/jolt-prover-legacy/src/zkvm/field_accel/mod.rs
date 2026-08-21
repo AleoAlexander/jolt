@@ -159,6 +159,10 @@ pub struct FieldAccelWitness {
 }
 
 impl FieldAccelWitness {
+    #[expect(
+        clippy::expect_used,
+        reason = "callers validate records first; a violating record here is a caller bug"
+    )]
     pub fn from_records(records: &[FieldOpRecord], params: &FieldAccelParams) -> Self {
         let n = records.len().max(1).next_power_of_two();
         let mut words: [Vec<u64>; 16] = Default::default();

@@ -189,8 +189,14 @@ impl Fq {
 #[cfg(all(target_arch = "riscv64", not(feature = "host")))]
 impl Fq {
     /// self / divisor via the DIVQ inline (advice inverse, verified by
-    /// multiplication in the sequence). Division by zero spoils the proof.
+    /// multiplication in the sequence). Division by zero spoils the proof
+    /// in-guest, BEFORE the inline runs or the result is welded — this
+    /// guard is what the B2 soundness inventory relies on for the
+    /// zero-divisor case (a divisor of 0 admits no valid record).
     pub fn div(&self, divisor: &Fq) -> Fq {
+        if divisor.is_zero() {
+            jolt_inlines_sdk::spoil_proof();
+        }
         let mut e = [0u64; 4];
         unsafe {
             use crate::{EDBLS_DIVQ_FUNCT3, EDBLS_FUNCT7, INLINE_OPCODE};

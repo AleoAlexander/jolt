@@ -69,7 +69,7 @@ pub fn main() {
         // end-to-end gadget cost for the RFC.
         use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
         use jolt_prover_legacy::zkvm::field_accel::bound::{
-            commit_advice_region, prove_field_accel_bound, verify_field_accel_bound,
+            prove_field_accel_bound, verify_field_accel_bound,
         };
         const MAX_ADVICE_TRANSFER: usize = 8388608; // 2^23 bytes = 2^20 words
 
@@ -85,20 +85,19 @@ pub fn main() {
         println!("bound sidecar setup: {:.1}s", t.elapsed().as_secs_f64());
         let t = std::time::Instant::now();
         let mut pt = Blake2bTranscript::new(b"field_accel_bound");
-        let bound_proof = prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
-            &advice_bytes,
-            MAX_ADVICE_TRANSFER,
-            &params,
-            &setup,
-            &mut pt,
-        )
-        .expect("bound gadget proving failed");
+        // Gadget-timing measurement only: no main proof exists at this
+        // scale, so the direct (unbridged) verifier is used with the
+        // commitment the prover derived from the same bytes.
+        let (bound_proof, advice_commitment) =
+            prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+                &advice_bytes,
+                MAX_ADVICE_TRANSFER,
+                &params,
+                &setup,
+                &mut pt,
+            )
+            .expect("bound gadget proving failed");
         let bound_prove_s = t.elapsed().as_secs_f64();
-        let (advice_commitment, _) = commit_advice_region::<jolt_sdk::F, jolt_sdk::PCS>(
-            &advice_bytes,
-            MAX_ADVICE_TRANSFER,
-            &setup,
-        );
         let t = std::time::Instant::now();
         let mut vt = Blake2bTranscript::new(b"field_accel_bound");
         verify_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
@@ -188,7 +187,7 @@ pub fn main() {
         use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
         use jolt_prover_legacy::transcripts::{Blake2bTranscript, Transcript as _};
         use jolt_prover_legacy::zkvm::field_accel::bound::{
-            commit_advice_region, prove_field_accel_bound, verify_field_accel_bound,
+            prove_field_accel_bound, verify_field_accel_bound_bridged,
         };
         use jolt_prover_legacy::zkvm::field_accel::FieldAccelParams;
         const MAX_ADVICE_MB: usize = 1048576; // mult_bench_bound's attribute
@@ -233,39 +232,30 @@ pub fn main() {
         let verifier_setup = jolt_sdk::PCS::setup_verifier(setup);
         let t = std::time::Instant::now();
         let mut pt = Blake2bTranscript::new(b"field_accel_bound");
-        let bound_proof = prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
-            &advice_bytes,
-            MAX_ADVICE_MB,
-            &params,
-            setup,
-            &mut pt,
-        )
-        .expect("bound gadget proving failed");
+        let (bound_proof, advice_commitment) =
+            prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+                &advice_bytes,
+                MAX_ADVICE_MB,
+                &params,
+                setup,
+                &mut pt,
+            )
+            .expect("bound gadget proving failed");
         let sidecar_s = t.elapsed().as_secs_f64();
 
-        let (advice_commitment, _) = commit_advice_region::<jolt_sdk::F, jolt_sdk::PCS>(
-            &advice_bytes,
-            MAX_ADVICE_MB,
-            setup,
-        );
-        let recomputed_vc = <jolt_sdk::PCS as jolt_sdk::ProofCommitmentScheme<
-            jolt_sdk::F,
-        >>::commitment_into_verifier(advice_commitment.clone());
-        assert_eq!(
-            Some(recomputed_vc),
-            proof_b.untrusted_advice_commitment,
-            "sidecar advice commitment differs from the main proof's"
-        );
+        // Bridged verification: the library checks the commitment equality
+        // against the main proof, then verifies the gadget.
         let mut vt = Blake2bTranscript::new(b"field_accel_bound");
-        verify_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+        verify_field_accel_bound_bridged::<jolt_sdk::F, jolt_sdk::PCS, _>(
             &bound_proof,
             &advice_commitment,
+            proof_b.untrusted_advice_commitment.as_ref(),
             MAX_ADVICE_MB,
             &params,
             &verifier_setup,
             &mut vt,
         )
-        .expect("bound gadget verification failed");
+        .expect("bound gadget bridged verification failed");
         println!(
             "mult_bench BOUND gate PASSED: welds + gadget sidecar ({sidecar_s:.3}s) + commitment equality"
         );

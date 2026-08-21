@@ -87,6 +87,9 @@ pub fn decode_header_word(word: u64) -> Result<(usize, usize), &'static str> {
 /// Enforces the self-anchoring pad rule: pad = 128 − varint_size(len),
 /// blocks starting at word 16.
 pub fn parse_region_rows(words: &[u64]) -> Result<(usize, Vec<[u64; RECORD_WORDS]>), &'static str> {
+    if words.len() < RECORD_WORDS {
+        return Err("region smaller than one record block");
+    }
     let (len, varint_size) = decode_header_word(words[0])?;
     let pad = 128 - varint_size;
     if len < pad || (len - pad) % 128 != 0 {
@@ -147,23 +150,43 @@ fn interpolate_corners<F: JoltField>(corners: &[F], r: &[F::Challenge], num_vars
         .sum()
 }
 
-/// Build the advice-region word vector exactly as the prover pipeline does
-/// (`populate_memory_states` semantics: LE bytes packed into u64 words,
-/// zero-padded to max_untrusted_advice_size / 8).
-pub fn region_words(advice_bytes: &[u8], max_untrusted_advice_size: usize) -> Vec<u64> {
-    let mut words = vec![0u64; max_untrusted_advice_size / 8];
-    for (i, chunk) in advice_bytes.chunks(8).enumerate() {
-        let mut b = [0u8; 8];
-        b[..chunk.len()].copy_from_slice(chunk);
-        words[i] = u64::from_le_bytes(b);
+/// Build the advice-region word vector exactly as the prover pipeline does,
+/// by calling the pipeline's own packing helper (`populate_memory_states`),
+/// zero-padded to max_untrusted_advice_size / 8 words. Errors instead of
+/// panicking when the blob exceeds the region.
+pub fn region_words(
+    advice_bytes: &[u8],
+    max_untrusted_advice_size: usize,
+) -> Result<Vec<u64>, &'static str> {
+    if advice_bytes.len() > max_untrusted_advice_size {
+        return Err("advice bytes exceed max_untrusted_advice_size");
     }
-    words
+    let mut words = vec![0u64; max_untrusted_advice_size / 8];
+    crate::zkvm::ram::populate_memory_states(0, advice_bytes, Some(&mut words), None);
+    Ok(words)
+}
+
+/// Check every parsed row satisfies `x·y = w·q + z` over the integers,
+/// returning Err (not panicking) on a violating record so the prover API
+/// keeps its Result contract even on malformed blobs.
+fn validate_rows(rows: &[[u64; RECORD_WORDS]], params: &FieldAccelParams) -> Result<(), &'static str> {
+    let q = params.modulus();
+    for row in rows {
+        let rec = row_to_record(row);
+        let lhs = super::limbs_to_biguint(&rec.x) * super::limbs_to_biguint(&rec.y);
+        let rhs = super::limbs_to_biguint(&rec.w) * &q + super::limbs_to_biguint(&rec.z);
+        if lhs != rhs {
+            return Err("record violates x*y = w*q + z");
+        }
+    }
+    Ok(())
 }
 
 /// The vendored arkworks MSM builds a thread pool PER CHUNK inside a
 /// parallel map; large sidecar commitments would spawn hundreds of pools
 /// concurrently and hit the OS thread cap (EAGAIN). Running our PCS work
 /// inside one small dedicated pool caps concurrent chunk-pool creation.
+#[expect(clippy::expect_used, reason = "pool construction failure is unrecoverable")]
 fn pcs_pool() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
@@ -190,12 +213,12 @@ pub fn commit_advice_region<F, PCS>(
     advice_bytes: &[u8],
     max_untrusted_advice_size: usize,
     setup: &PCS::ProverSetup,
-) -> (PCS::Commitment, PCS::OpeningProofHint)
+) -> Result<(PCS::Commitment, PCS::OpeningProofHint), &'static str>
 where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
-    let words = region_words(advice_bytes, max_untrusted_advice_size);
+    let words = region_words(advice_bytes, max_untrusted_advice_size)?;
     let poly = MultilinearPolynomial::from(words);
     let _guard = DoryGlobals::initialize_context(
         1,
@@ -204,7 +227,7 @@ where
         None,
     );
     let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
-    pcs_pool().install(|| PCS::commit(&poly, setup))
+    Ok(pcs_pool().install(|| PCS::commit(&poly, setup)))
 }
 
 fn aux_vector<F: JoltField>(witness: &FieldAccelWitness) -> Vec<F> {
@@ -236,26 +259,32 @@ fn bind_bound_statement<T: Transcript>(
 }
 
 /// Prove the bound gadget over the committed advice region. `advice_bytes`
-/// is the exact `program_io.untrusted_advice` byte blob of the main proof;
-/// the recomputed region commitment MUST equal the main proof's
-/// `untrusted_advice_commitment` (the verifier checks against that object).
+/// is the exact `program_io.untrusted_advice` byte blob of the main proof.
+/// Returns the proof together with the recomputed advice-region commitment,
+/// which callers pass to [`verify_field_accel_bound_bridged`] so the
+/// equality check against the main proof's `untrusted_advice_commitment` —
+/// the soundness-critical bridge — happens inside the library, not in
+/// caller code.
 pub fn prove_field_accel_bound<F, PCS, T>(
     advice_bytes: &[u8],
     max_untrusted_advice_size: usize,
     params: &FieldAccelParams,
     setup: &PCS::ProverSetup,
     transcript: &mut T,
-) -> Result<FieldAccelBoundProof<F, PCS>, &'static str>
+) -> Result<(FieldAccelBoundProof<F, PCS>, PCS::Commitment), &'static str>
 where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
     T: Transcript,
 {
-    let words = region_words(advice_bytes, max_untrusted_advice_size);
-    assert!(words.len().is_power_of_two(), "region word count must be a power of two");
+    let words = region_words(advice_bytes, max_untrusted_advice_size)?;
+    if !words.len().is_power_of_two() {
+        return Err("region word count must be a power of two");
+    }
     let advice_vars = words.len().trailing_zeros() as usize;
 
     let (_n, rows) = parse_region_rows(&words)?;
+    validate_rows(&rows, params)?;
     let records: Vec<FieldOpRecord> = rows.iter().map(row_to_record).collect();
     let witness = FieldAccelWitness::from_records(&records, params);
     let log_rows = witness.padded_len().trailing_zeros() as usize;
@@ -264,11 +293,18 @@ where
     }
 
     // Commit (advice re-commit for the hint; aux fresh), then absorb both
-    // BEFORE any challenge.
-    let advice_poly = MultilinearPolynomial::from(words.clone());
+    // BEFORE any challenge. Capture the header word before the region
+    // vector moves into the polynomial (no 32 MB clone).
+    let header_word = words[0];
+    let region_word_count = words.len();
+    let advice_poly = MultilinearPolynomial::from(words);
     let (advice_commitment, advice_hint) = {
-        let _guard =
-            DoryGlobals::initialize_context(1, words.len(), DoryContext::UntrustedAdvice, None);
+        let _guard = DoryGlobals::initialize_context(
+            1,
+            region_word_count,
+            DoryContext::UntrustedAdvice,
+            None,
+        );
         let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
         pcs_pool().install(|| PCS::commit(&advice_poly, setup))
     };
@@ -307,15 +343,18 @@ where
     let advice_claim = interpolate_corners::<F>(&word_corner_evals, &rho, WORD_BITS);
     // Header opening at the all-zero point (region word 0).
     let header_point = vec![F::Challenge::from(0u128); advice_vars];
-    let header_word = words[0];
     // Aux opening at (r_row ‖ σ).
     let aux_vars = log_rows + AUX_COL_BITS;
     let aux_point = be_point::<F>(aux_vars, &r_row, &sigma);
     let aux_claim = interpolate_corners::<F>(&aux_corner_evals, &sigma, AUX_COL_BITS);
 
     let (advice_opening, header_opening) = {
-        let _guard =
-            DoryGlobals::initialize_context(1, words.len(), DoryContext::UntrustedAdvice, None);
+        let _guard = DoryGlobals::initialize_context(
+            1,
+            region_word_count,
+            DoryContext::UntrustedAdvice,
+            None,
+        );
         let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
         let (advice_opening, _) = pcs_pool().install(|| {
             PCS::prove(
@@ -339,7 +378,7 @@ where
         aux_opening
     };
 
-    Ok(FieldAccelBoundProof {
+    Ok((FieldAccelBoundProof {
         aux_commitment,
         log_rows,
         round_polys,
@@ -351,12 +390,62 @@ where
         header_opening,
         aux_claim,
         aux_opening,
-    })
+    }, advice_commitment))
 }
 
-/// Verify the bound gadget against the MAIN proof's untrusted-advice
-/// commitment. `max_untrusted_advice_size` is the verifier-known memory
-/// layout constant of the guest.
+/// Verify the bound gadget AND its bridge to the main proof: checks that
+/// `advice_commitment` (the region commitment returned by
+/// [`prove_field_accel_bound`], derived from the actual advice bytes)
+/// converts to exactly the `untrusted_advice_commitment` the main
+/// `JoltProof` carries, then verifies the gadget proof against it. This is
+/// the soundness-critical composition check — without it the gadget could
+/// be proven over a region unrelated to the one the guest welded. Callers
+/// should use THIS entry point, passing
+/// `proof.untrusted_advice_commitment.as_ref()` from the main proof.
+pub fn verify_field_accel_bound_bridged<F, PCS, T>(
+    proof: &FieldAccelBoundProof<F, PCS>,
+    advice_commitment: &PCS::Commitment,
+    main_untrusted_advice_commitment: Option<
+        &<<PCS as crate::zkvm::proof::ProofCommitmentScheme<F>>::VerifierPcs as jolt_crypto::Commitment>::Output,
+    >,
+    max_untrusted_advice_size: usize,
+    params: &FieldAccelParams,
+    setup: &PCS::VerifierSetup,
+    transcript: &mut T,
+) -> Result<(), &'static str>
+where
+    F: JoltField + crate::zkvm::proof::ProofField,
+    PCS: CommitmentScheme<Field = F> + crate::zkvm::proof::ProofCommitmentScheme<F>,
+    <<PCS as crate::zkvm::proof::ProofCommitmentScheme<F>>::VerifierPcs as jolt_crypto::Commitment>::Output:
+        PartialEq,
+    T: Transcript,
+{
+    let Some(main_commitment) = main_untrusted_advice_commitment else {
+        return Err("main proof carries no untrusted-advice commitment");
+    };
+    let converted =
+        <PCS as crate::zkvm::proof::ProofCommitmentScheme<F>>::commitment_into_verifier(
+            advice_commitment.clone(),
+        );
+    if &converted != main_commitment {
+        return Err("advice commitment does not match the main proof's untrusted_advice_commitment");
+    }
+    verify_field_accel_bound::<F, PCS, T>(
+        proof,
+        advice_commitment,
+        max_untrusted_advice_size,
+        params,
+        setup,
+        transcript,
+    )
+}
+
+/// Verify the bound gadget against an advice-region commitment. Prefer
+/// [`verify_field_accel_bound_bridged`], which also performs the equality
+/// check against the main proof's `untrusted_advice_commitment`; calling
+/// this directly is sound ONLY if the caller has bound `advice_commitment`
+/// to the main proof some other way. `max_untrusted_advice_size` is the
+/// verifier-known memory layout constant of the guest.
 pub fn verify_field_accel_bound<F, PCS, T>(
     proof: &FieldAccelBoundProof<F, PCS>,
     advice_commitment: &PCS::Commitment,
@@ -630,7 +719,7 @@ mod roundtrip_tests {
         let verifier_setup = DoryCommitmentScheme::setup_verifier(&setup);
 
         let mut pt = Blake2bTranscript::new(b"fa_bound_test");
-        let proof = prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
+        let (proof, prover_commitment) = prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
             &advice_bytes,
             MAX_ADVICE,
             &params(),
@@ -640,19 +729,18 @@ mod roundtrip_tests {
         .unwrap();
 
         // the advice commitment the verifier holds (from the main proof, in
-        // the e2e flow) — recompute it the same way the prover pipeline does
-        let words = region_words(&advice_bytes, MAX_ADVICE);
-        let advice_poly = MultilinearPolynomial::<Fr>::from(words);
-        let (advice_commitment, _) = {
-            let _guard = DoryGlobals::initialize_context(
-                1,
-                MAX_ADVICE / 8,
-                DoryContext::UntrustedAdvice,
-                None,
-            );
-            let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
-            DoryCommitmentScheme::commit(&advice_poly, &setup)
-        };
+        // the e2e flow) — recompute independently and require it to match
+        // the one the prover returned
+        let (advice_commitment, _) = commit_advice_region::<Fr, DoryCommitmentScheme>(
+            &advice_bytes,
+            MAX_ADVICE,
+            &setup,
+        )
+        .unwrap();
+        assert_eq!(
+            advice_commitment, prover_commitment,
+            "prover-returned commitment must equal an independent recompute"
+        );
 
         let mut vt = Blake2bTranscript::new(b"fa_bound_test");
         verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
@@ -702,18 +790,12 @@ mod roundtrip_tests {
         let mut other_bytes = advice_bytes.clone();
         let flip = other_bytes.len() - 5;
         other_bytes[flip] ^= 1;
-        let other_words = region_words(&other_bytes, MAX_ADVICE);
-        let other_poly = MultilinearPolynomial::<Fr>::from(other_words);
-        let (other_commitment, _) = {
-            let _guard = DoryGlobals::initialize_context(
-                1,
-                MAX_ADVICE / 8,
-                DoryContext::UntrustedAdvice,
-                None,
-            );
-            let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
-            DoryCommitmentScheme::commit(&other_poly, &setup)
-        };
+        let (other_commitment, _) = commit_advice_region::<Fr, DoryCommitmentScheme>(
+            &other_bytes,
+            MAX_ADVICE,
+            &setup,
+        )
+        .unwrap();
         let mut vt = Blake2bTranscript::new(b"fa_bound_test");
         assert!(verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
             &proof, &other_commitment, MAX_ADVICE, &params(), &verifier_setup, &mut vt
@@ -734,19 +816,14 @@ mod roundtrip_tests {
         assert_eq!(len, false_bytes.len() - vs);
         false_bytes[vs + pad + 64] ^= 1;
         let mut pt = Blake2bTranscript::new(b"fa_bound_test");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
-                &false_bytes,
-                MAX_ADVICE,
-                &params(),
-                &setup,
-                &mut pt,
-            )
-        }));
-        assert!(
-            result.is_err() || result.unwrap().is_err(),
-            "honest prover must refuse a false record"
+        let result = prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
+            &false_bytes,
+            MAX_ADVICE,
+            &params(),
+            &setup,
+            &mut pt,
         );
+        assert!(result.is_err(), "prover must refuse a false record with Err, not panic");
     }
 
     #[test]
@@ -755,7 +832,7 @@ mod roundtrip_tests {
         let setup = DoryCommitmentScheme::setup_prover(14);
         let verifier_setup = DoryCommitmentScheme::setup_verifier(&setup);
         let mut pt = Blake2bTranscript::new(b"fa_bound_zero");
-        let proof = prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
+        let (proof, advice_commitment) = prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
             &advice_bytes,
             MAX_ADVICE,
             &params(),
@@ -763,18 +840,6 @@ mod roundtrip_tests {
             &mut pt,
         )
         .unwrap();
-        let words = region_words(&advice_bytes, MAX_ADVICE);
-        let advice_poly = MultilinearPolynomial::<Fr>::from(words);
-        let (advice_commitment, _) = {
-            let _guard = DoryGlobals::initialize_context(
-                1,
-                MAX_ADVICE / 8,
-                DoryContext::UntrustedAdvice,
-                None,
-            );
-            let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
-            DoryCommitmentScheme::commit(&advice_poly, &setup)
-        };
         let mut vt = Blake2bTranscript::new(b"fa_bound_zero");
         verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
             &proof,

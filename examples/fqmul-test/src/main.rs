@@ -143,11 +143,8 @@ pub fn main() {
     let mut tampered = blob.clone();
     let pad = jolt_inlines_edwards_bls12::bind::head_pad(tampered.len());
     tampered[pad] ^= 1;
-    let mut program_neg = guest::compile_fqmul_chain_bound(target_dir);
-    let _ = guest::preprocess_shared_fqmul_chain_bound(&mut program_neg);
-    let prove_neg = guest::build_prover_fqmul_chain_bound(program_neg, prover_pp_b.clone());
     let neg = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let (o, p, io) = prove_neg(seed, jolt_sdk::UntrustedAdvice::new(tampered.as_slice()));
+        let (o, p, io) = prove_b(seed, jolt_sdk::UntrustedAdvice::new(tampered.as_slice()));
         verify_b(seed, o, io.panic, p)
     }));
     match neg {
@@ -161,7 +158,7 @@ pub fn main() {
     // evaluations, digit range checks, and the header-derived record count.
     println!("\n=== B2 bound gate ===");
     use jolt_prover_legacy::zkvm::field_accel::bound::{
-        prove_field_accel_bound, verify_field_accel_bound,
+        prove_field_accel_bound, verify_field_accel_bound_bridged,
     };
     use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
 
@@ -177,7 +174,7 @@ pub fn main() {
 
     let now = std::time::Instant::now();
     let mut pt = jolt_prover_legacy::transcripts::Blake2bTranscript::new(b"field_accel_bound");
-    let bound_proof = prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+    let (bound_proof, advice_commitment) = prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
         &advice_bytes,
         MAX_ADVICE,
         &params,
@@ -187,36 +184,23 @@ pub fn main() {
     .expect("bound gadget proving failed");
     println!("bound gadget prover time: {:.3}s", now.elapsed().as_secs_f64());
 
-    // Recompute the advice commitment and require it to EQUAL the one the
-    // main proof carries — the bridge that welds sidecar to main proof.
-    let (advice_commitment, _) = jolt_prover_legacy::zkvm::field_accel::bound::commit_advice_region::<
-        jolt_sdk::F,
-        jolt_sdk::PCS,
-    >(&advice_bytes, MAX_ADVICE, setup);
-    let recomputed_vc =
-        <jolt_sdk::PCS as jolt_sdk::ProofCommitmentScheme<jolt_sdk::F>>::commitment_into_verifier(
-            advice_commitment.clone(),
-        );
-    assert_eq!(
-        Some(recomputed_vc),
-        proof_b.untrusted_advice_commitment,
-        "B2 BOUND GATE FAILED: sidecar advice commitment differs from the main proof's"
-    );
-    println!("advice commitment matches the main proof's untrusted_advice_commitment");
-
+    // Bridged verification: the library checks the sidecar's advice
+    // commitment equals the main proof's untrusted_advice_commitment, then
+    // verifies the gadget proof against it.
     let now = std::time::Instant::now();
     let mut vt = jolt_prover_legacy::transcripts::Blake2bTranscript::new(b"field_accel_bound");
-    verify_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+    verify_field_accel_bound_bridged::<jolt_sdk::F, jolt_sdk::PCS, _>(
         &bound_proof,
         &advice_commitment,
+        proof_b.untrusted_advice_commitment.as_ref(),
         MAX_ADVICE,
         &params,
         &verifier_setup,
         &mut vt,
     )
-    .expect("B2 BOUND GATE FAILED: bound gadget proof did not verify");
+    .expect("B2 BOUND GATE FAILED: bridged verification failed");
     println!(
-        "B2 bound gate PASSED: gadget verifies against the committed region in {:.4}s",
+        "B2 bound gate PASSED: commitment bridge + gadget verify in {:.4}s",
         now.elapsed().as_secs_f64()
     );
 
@@ -225,9 +209,10 @@ pub fn main() {
     bad.aux_corner_evals[7] += <jolt_sdk::F as jolt_prover_legacy::field::JoltField>::from_u64(1);
     let mut vt = jolt_prover_legacy::transcripts::Blake2bTranscript::new(b"field_accel_bound");
     assert!(
-        verify_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+        verify_field_accel_bound_bridged::<jolt_sdk::F, jolt_sdk::PCS, _>(
             &bad,
             &advice_commitment,
+            proof_b.untrusted_advice_commitment.as_ref(),
             MAX_ADVICE,
             &params,
             &verifier_setup,

@@ -63,11 +63,16 @@ mod active {
     static mut CURSOR: usize = 0;
 
     /// Register the record blob (the full deserialized `&[u8]`, pad
-    /// included). Spoils unless `blob.len()` satisfies the pad rule and
+    /// included). Spoils unless `blob.len()` satisfies the pad rule, the
+    /// head-pad bytes are all zero (so the committed region's pad content
+    /// is fixed, matching what the sidecar prover/verifier enforce), and
     /// the block base is 8-aligned.
     pub fn init(blob: &[u8]) {
         let pad = head_pad(blob.len());
         if blob.len() < pad || !(blob.len() - pad).is_multiple_of(RECORD_BYTES) {
+            jolt_inlines_sdk::spoil_proof();
+        }
+        if blob.iter().take(pad).any(|&b| b != 0) {
             jolt_inlines_sdk::spoil_proof();
         }
         let base = unsafe { blob.as_ptr().add(pad) };
@@ -115,14 +120,10 @@ mod active {
         }
     }
 
-    /// Number of blocks welded so far (guest-side sanity/debug).
-    pub fn welded_count() -> usize {
-        unsafe { CURSOR / RECORD_WORDS }
-    }
 }
 
 #[cfg(feature = "field-accel-bind")]
-pub use active::{finalize, init, weld, welded_count};
+pub use active::{finalize, init, weld};
 
 #[cfg(not(feature = "field-accel-bind"))]
 mod inactive {
@@ -138,12 +139,7 @@ mod inactive {
     #[inline(always)]
     pub fn finalize() {}
 
-    /// Always zero without `field-accel-bind`.
-    #[inline(always)]
-    pub fn welded_count() -> usize {
-        0
-    }
 }
 
 #[cfg(not(feature = "field-accel-bind"))]
-pub use inactive::{finalize, init, weld, welded_count};
+pub use inactive::{finalize, init, weld};

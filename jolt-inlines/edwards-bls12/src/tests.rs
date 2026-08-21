@@ -178,7 +178,7 @@ fn scalar_mul_matches_arkworks() {
 
 #[test]
 fn record_blob_layout_and_identity() {
-    use crate::sequence_builder::{build_record_blob, record_from_xyz};
+    use crate::sequence_builder::record_from_xyz;
     use jolt_inlines_sdk::host::{limbs_to_nbiguint, NBigUint};
 
     let q = limbs_to_nbiguint(&crate::sdk::MODULUS);
@@ -203,15 +203,21 @@ fn record_blob_layout_and_identity() {
     let drhs = limbs_to_nbiguint(&dw) * &q + limbs_to_nbiguint(&dz);
     assert_eq!(dlhs, drhs, "c*b == w*q + a");
 
-    // blob: 16-word blocks in record order
-    let blob = build_record_blob(&[rec, (dx, dy, dz, dw)]);
-    assert_eq!(blob.len(), 32);
-    assert_eq!(&blob[0..4], &x);
-    assert_eq!(&blob[4..8], &y);
-    assert_eq!(&blob[8..12], &z);
-    assert_eq!(&blob[12..16], &w);
-    assert_eq!(&blob[16..20], &dx);
-    assert_eq!(&blob[28..32], &dw);
+    // padded blob: head pad, then 16-word (128-byte) blocks in record order
+    let blob = crate::sequence_builder::build_record_blob_padded(&[rec, (dx, dy, dz, dw)]);
+    let pad = crate::bind::head_pad(blob.len());
+    assert_eq!(blob.len() - pad, 256);
+    let word_at = |i: usize| {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&blob[pad + 8 * i..pad + 8 * (i + 1)]);
+        u64::from_le_bytes(b)
+    };
+    assert_eq!([word_at(0), word_at(1), word_at(2), word_at(3)], x);
+    assert_eq!([word_at(4), word_at(5), word_at(6), word_at(7)], y);
+    assert_eq!([word_at(8), word_at(9), word_at(10), word_at(11)], z);
+    assert_eq!([word_at(12), word_at(13), word_at(14), word_at(15)], w);
+    assert_eq!([word_at(16), word_at(17), word_at(18), word_at(19)], dx);
+    assert_eq!([word_at(28), word_at(29), word_at(30), word_at(31)], dw);
     let _ = NBigUint::ZERO; // silence unused-import lint if asserts compile out
 }
 

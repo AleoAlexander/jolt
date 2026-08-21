@@ -119,6 +119,12 @@ pub struct BatchingChallenges<F: JoltField> {
     pub alpha_pows: [F; 14],
     /// gamma^0..gamma^209 for the digit-validity columns.
     pub gamma_pows: Vec<F>,
+    /// Constants hoisted out of the innermost constraint evaluation
+    /// (constraint_eval runs millions of times per proof).
+    pub pow4: [F; DIGITS_PER_CARRY],
+    pub two_64: F,
+    pub offset: F,
+    pub small: [F; 4],
 }
 
 impl<F: JoltField> BatchingChallenges<F> {
@@ -135,9 +141,18 @@ impl<F: JoltField> BatchingChallenges<F> {
             gamma_pows.push(g);
             g *= gamma;
         }
+        let four = F::from_u64(4);
+        let mut pow4 = [F::one(); DIGITS_PER_CARRY];
+        for d in 1..DIGITS_PER_CARRY {
+            pow4[d] = pow4[d - 1] * four;
+        }
         BatchingChallenges {
             alpha_pows,
             gamma_pows,
+            pow4,
+            two_64: F::from_u128(1u128 << 64),
+            offset: F::from_u128(CARRY_OFFSET as u128),
+            small: [F::zero(), F::one(), F::from_u64(2), F::from_u64(3)],
         }
     }
 }
@@ -148,8 +163,8 @@ pub(super) fn constraint_eval<F: JoltField>(
     q_words: &[F; 4],
     ch: &BatchingChallenges<F>,
 ) -> F {
-    let two_64 = F::from_u128(1u128 << 64);
-    let offset = F::from_u128(CARRY_OFFSET as u128);
+    let two_64 = ch.two_64;
+    let offset = ch.offset;
     let mut acc = F::zero();
     // product columns
     for k in 0..NUM_PRODUCT_COLUMNS {
@@ -176,18 +191,15 @@ pub(super) fn constraint_eval<F: JoltField>(
     // carry recomposition
     for j in 0..NUM_CARRIES {
         let mut s = F::zero();
-        let mut pow4 = F::one();
-        let four = F::from_u64(4);
         for d in 0..DIGITS_PER_CARRY {
-            s += pow4 * vals[DIG + j * DIGITS_PER_CARRY + d];
-            pow4 *= four;
+            s += ch.pow4[d] * vals[DIG + j * DIGITS_PER_CARRY + d];
         }
         s -= vals[CARRY + j];
         acc += ch.alpha_pows[NUM_PRODUCT_COLUMNS + j] * s;
     }
     // digit validity, gamma-batched under alpha^13
     let mut dig_acc = F::zero();
-    let (one, two, three) = (F::one(), F::from_u64(2), F::from_u64(3));
+    let (one, two, three) = (ch.small[1], ch.small[2], ch.small[3]);
     for (idx, gamma_k) in ch.gamma_pows.iter().enumerate() {
         let v = vals[DIG + idx];
         dig_acc += *gamma_k * (v * (v - one) * (v - two) * (v - three));

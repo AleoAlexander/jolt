@@ -15,10 +15,10 @@ re-run green and numbers re-measured (see RESULTS.md `rebase-20260817`).
   (bind.rs; tampered blob ⇒ main proof fails); the gadget proves the
   64-bit-word identity with committed offset carries + 2-bit digit range
   checks, Dory-bound evaluations, and a header-anchored record count
-  (bound.rs). Measured: fqmul 85 cyc/op bound (vs 45 unbound / 252
+  (bound.rs). Measured: fqmul 87 cyc/op bound (vs 45 unbound / 252
   software); usdcx 20.23M cycles bound vs 84.26M software (4.2x; 5.8x
-  unbound); bound gadget proves the 46,056-op log in 10.7s, verifies in
-  0.14s; mult_bench bound end-to-end (welds + sidecar + commitment
+  unbound); bound gadget proves the 46,056-op log in ~9.6s, verifies in
+  ~0.15s; mult_bench bound end-to-end (welds + sidecar + commitment
   equality) passes. Composition is a sidecar sharing the main proof's
   advice commitment object — in-pipeline integration is upstream's call
   (RFC question 2).
@@ -52,6 +52,16 @@ src/bind.rs`, spec Rev 3):
 7. Division b = 0 cannot reach the gadget: the guest spoils on
    division-by-zero before welding (sdk.rs), so no valid proof contains
    a zero-divisor record.
+
+The commitment bridge lives in the library:
+`verify_field_accel_bound_bridged` checks the sidecar's advice commitment
+equals the main proof's `untrusted_advice_commitment` before verifying the
+gadget — integrators use that entry point, not a hand-rolled equality.
+
+Measurement note: guests built with the `field-accel-bind` feature pay a
+~4 cyc/op no-op weld check even when unbound (fqmul unbound reads 45
+cyc/op under the feature vs 41 clean); the RFC's unbound usdcx baseline
+(14.56M) is from a clean feature-off build.
 
 Still open, explicitly: non-ZK only (no BlindFold sync), no Akita path,
 and the SIDECAR COMPOSITION — the gadget proof shares the main proof's
