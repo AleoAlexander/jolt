@@ -64,9 +64,11 @@ mod active {
 
     /// Register the record blob (the full deserialized `&[u8]`, pad
     /// included). Spoils unless `blob.len()` satisfies the pad rule, the
-    /// head-pad bytes are all zero (so the committed region's pad content
-    /// is fixed, matching what the sidecar prover/verifier enforce), and
-    /// the block base is 8-aligned.
+    /// head-pad bytes are all zero, and the block base is 8-aligned. The
+    /// pad-content zero check here and in the sidecar PROVER's parser are
+    /// the enforcement points — the sidecar verifier only opens the header
+    /// word, so in the composed protocol pad-content soundness rests on
+    /// THIS in-circuit check.
     pub fn init(blob: &[u8]) {
         let pad = head_pad(blob.len());
         if blob.len() < pad || !(blob.len() - pad).is_multiple_of(RECORD_BYTES) {
@@ -119,7 +121,6 @@ mod active {
             }
         }
     }
-
 }
 
 #[cfg(feature = "field-accel-bind")]
@@ -138,7 +139,6 @@ mod inactive {
     /// No-op without `field-accel-bind`.
     #[inline(always)]
     pub fn finalize() {}
-
 }
 
 #[cfg(not(feature = "field-accel-bind"))]

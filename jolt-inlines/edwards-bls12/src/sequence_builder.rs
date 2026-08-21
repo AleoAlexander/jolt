@@ -15,8 +15,8 @@ use ark_ed_on_bls12_377::Fq;
 use ark_ff::{BigInt, Field, PrimeField};
 use jolt_inlines_sdk::host::{
     load_field_element_limbs, ExpandedInstructionSequence, ExpansionError, FieldElementAdvice,
-    FormatInline, InlineAdviceContext, InlineAdviceError, InlineBuilderExt,
-    InlineExpansionBuilder, InlineOp, InlineOperands,
+    FormatInline, InlineAdviceContext, InlineAdviceError, InlineBuilderExt, InlineExpansionBuilder,
+    InlineOp, InlineOperands,
 };
 
 /// p = 2^256 - q, computed from the arkworks modulus (never hand-transcribed).

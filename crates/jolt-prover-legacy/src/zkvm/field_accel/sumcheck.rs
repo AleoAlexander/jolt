@@ -252,7 +252,13 @@ pub(super) fn zero_check_prove<F: JoltField, T: Transcript>(
         let evals = (0..m)
             .into_par_iter()
             .fold(
-                || (vec![F::zero(); num_cols], vec![F::zero(); num_cols], [F::zero(); DEGREE + 1]),
+                || {
+                    (
+                        vec![F::zero(); num_cols],
+                        vec![F::zero(); num_cols],
+                        [F::zero(); DEGREE + 1],
+                    )
+                },
                 |(mut cur, mut diff, mut acc), i| {
                     for ((cur_c, diff_c), col) in
                         cur.iter_mut().zip(diff.iter_mut()).zip(cols.iter())

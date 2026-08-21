@@ -14,7 +14,8 @@ fn mul_matches_arkworks_1000_random() {
     let mut rng = ark_std::test_rng();
     for _ in 0..1000 {
         let (a, b) = (ArkFq::rand(&mut rng), ArkFq::rand(&mut rng));
-        let ours = Fq::from_canonical(a.into_bigint().0).mul(&Fq::from_canonical(b.into_bigint().0));
+        let ours =
+            Fq::from_canonical(a.into_bigint().0).mul(&Fq::from_canonical(b.into_bigint().0));
         assert_eq!(ours.to_canonical(), (a * b).into_bigint().0);
     }
 }
@@ -182,7 +183,9 @@ fn record_blob_layout_and_identity() {
     use jolt_inlines_sdk::host::{limbs_to_nbiguint, NBigUint};
 
     let q = limbs_to_nbiguint(&crate::sdk::MODULUS);
-    let a = Fq { e: [3, 1, 4, 0x100] };
+    let a = Fq {
+        e: [3, 1, 4, 0x100],
+    };
     let b = Fq { e: [2, 7, 1, 0x80] };
     let c = a.mul(&b);
 
@@ -241,7 +244,9 @@ fn padded_blob_satisfies_guest_pad_rule() {
     use crate::bind::{head_pad, RECORD_BYTES};
     use crate::sequence_builder::{build_record_blob_padded, record_from_xyz};
 
-    let a = Fq { e: [3, 1, 4, 0x100] };
+    let a = Fq {
+        e: [3, 1, 4, 0x100],
+    };
     let b = Fq { e: [2, 7, 1, 0x80] };
     let c = a.mul(&b);
     let rec = record_from_xyz(a.e, b.e, c.e);

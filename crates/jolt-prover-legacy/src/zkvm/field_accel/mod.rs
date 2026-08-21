@@ -167,8 +167,9 @@ impl FieldAccelWitness {
         let n = records.len().max(1).next_power_of_two();
         let mut words: [Vec<u64>; 16] = Default::default();
         let mut carries: [Vec<u128>; NUM_CARRIES] = Default::default();
-        let mut digits: Vec<Vec<u8>> =
-            (0..NUM_DIGIT_COLUMNS).map(|_| Vec::with_capacity(n)).collect();
+        let mut digits: Vec<Vec<u8>> = (0..NUM_DIGIT_COLUMNS)
+            .map(|_| Vec::with_capacity(n))
+            .collect();
         for col in words.iter_mut() {
             col.reserve(n);
         }
@@ -185,7 +186,10 @@ impl FieldAccelWitness {
             for (j, carry) in record_carries.iter().enumerate() {
                 let offset = u128::try_from(carry + CARRY_OFFSET)
                     .expect("offset carry must be non-negative");
-                assert!(offset < (1u128 << (2 * DIGITS_PER_CARRY)), "carry out of range");
+                assert!(
+                    offset < (1u128 << (2 * DIGITS_PER_CARRY)),
+                    "carry out of range"
+                );
                 carries[j].push(offset);
                 for d in 0..DIGITS_PER_CARRY {
                     digits[j * DIGITS_PER_CARRY + d].push(((offset >> (2 * d)) & 3) as u8);

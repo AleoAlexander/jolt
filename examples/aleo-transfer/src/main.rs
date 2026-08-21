@@ -9,7 +9,10 @@ pub fn main() {
 
     let transfer_log = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
     let usdcx_summary = guest::analyze_usdcx_transfer_private(0xA1E0_0003_u64 as u64);
-    println!("usdcx_transfer_private trace: {} cycles", usdcx_summary.trace_len());
+    println!(
+        "usdcx_transfer_private trace: {} cycles",
+        usdcx_summary.trace_len()
+    );
     let usdcx_log = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
     {
         use jolt_inlines_edwards_bls12::sdk::MODULUS;
@@ -18,7 +21,9 @@ pub fn main() {
             sumcheck::{prove_field_accel, verify_field_accel},
             FieldAccelParams, FieldAccelWitness, FieldOpRecord,
         };
-        let params = FieldAccelParams { modulus_limbs: MODULUS };
+        let params = FieldAccelParams {
+            modulus_limbs: MODULUS,
+        };
         let records: Vec<FieldOpRecord> = usdcx_log
             .iter()
             .map(|(x, y, z, _w)| FieldOpRecord::new(*x, *y, *z, &params))
@@ -27,13 +32,22 @@ pub fn main() {
         let log_n = witness.padded_len().trailing_zeros() as usize;
         let t = std::time::Instant::now();
         let proof = prove_field_accel::<jolt_sdk::F, _>(
-            &witness, &params, &mut Blake2bTranscript::new(b"field_accel"));
+            &witness,
+            &params,
+            &mut Blake2bTranscript::new(b"field_accel"),
+        );
         let prove_s = t.elapsed().as_secs_f64();
-        verify_field_accel(&proof, &params, log_n, &mut Blake2bTranscript::new(b"field_accel"))
-            .expect("usdcx gadget proof failed");
+        verify_field_accel(
+            &proof,
+            &params,
+            log_n,
+            &mut Blake2bTranscript::new(b"field_accel"),
+        )
+        .expect("usdcx gadget proof failed");
         println!(
             "usdcx field-accel gadget: {} records, prove {:.3}s",
-            records.len(), prove_s
+            records.len(),
+            prove_s
         );
     }
 
@@ -45,7 +59,9 @@ pub fn main() {
             sumcheck::{prove_field_accel, verify_field_accel},
             FieldAccelParams, FieldAccelWitness, FieldOpRecord,
         };
-        let params = FieldAccelParams { modulus_limbs: MODULUS };
+        let params = FieldAccelParams {
+            modulus_limbs: MODULUS,
+        };
         let records: Vec<FieldOpRecord> = transfer_log
             .iter()
             .map(|(x, y, z, _w)| FieldOpRecord::new(*x, *y, *z, &params))
@@ -54,14 +70,24 @@ pub fn main() {
         let log_n = witness.padded_len().trailing_zeros() as usize;
         let t = std::time::Instant::now();
         let gadget_proof = prove_field_accel::<jolt_sdk::F, _>(
-            &witness, &params, &mut Blake2bTranscript::new(b"field_accel"));
+            &witness,
+            &params,
+            &mut Blake2bTranscript::new(b"field_accel"),
+        );
         let prove_s = t.elapsed().as_secs_f64();
         let t = std::time::Instant::now();
-        verify_field_accel(&gadget_proof, &params, log_n, &mut Blake2bTranscript::new(b"field_accel"))
-            .expect("transfer-scale gadget proof failed");
+        verify_field_accel(
+            &gadget_proof,
+            &params,
+            log_n,
+            &mut Blake2bTranscript::new(b"field_accel"),
+        )
+        .expect("transfer-scale gadget proof failed");
         println!(
             "field-accel gadget (transfer scale): {} records, prove {:.3}s, verify {:.4}s",
-            records.len(), prove_s, t.elapsed().as_secs_f64()
+            records.len(),
+            prove_s,
+            t.elapsed().as_secs_f64()
         );
 
         // B2 BOUND sidecar at transfer scale: the same log, now with Dory
@@ -69,13 +95,12 @@ pub fn main() {
         // end-to-end gadget cost for the RFC.
         use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
         use jolt_prover_legacy::zkvm::field_accel::bound::{
-            prove_field_accel_bound, verify_field_accel_bound,
+            prove_field_accel_bound, verify_field_accel_bound_unbridged,
         };
         const MAX_ADVICE_TRANSFER: usize = 8388608; // 2^23 bytes = 2^20 words
 
-        let blob = jolt_inlines_edwards_bls12::sequence_builder::build_record_blob_padded(
-            &transfer_log,
-        );
+        let blob =
+            jolt_inlines_edwards_bls12::sequence_builder::build_record_blob_padded(&transfer_log);
         let advice_bytes =
             jolt_sdk::postcard::to_stdvec(&jolt_sdk::UntrustedAdvice::new(blob.as_slice()))
                 .expect("advice serialization");
@@ -100,7 +125,7 @@ pub fn main() {
         let bound_prove_s = t.elapsed().as_secs_f64();
         let t = std::time::Instant::now();
         let mut vt = Blake2bTranscript::new(b"field_accel_bound");
-        verify_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+        verify_field_accel_bound_unbridged::<jolt_sdk::F, jolt_sdk::PCS, _>(
             &bound_proof,
             &advice_commitment,
             MAX_ADVICE_TRANSFER,
@@ -118,7 +143,10 @@ pub fn main() {
     }
 
     let soft = guest::analyze_usdcx_transfer_private_soft(0xA1E0_0003_u64 as u64);
-    println!("usdcx_transfer_private_soft trace: {} cycles", soft.trace_len());
+    println!(
+        "usdcx_transfer_private_soft trace: {} cycles",
+        soft.trace_len()
+    );
 
     // B2: usdcx with active welds — the honest bound-guest cycle count.
     {
@@ -179,7 +207,10 @@ pub fn main() {
 
     let t = std::time::Instant::now();
     let is_valid = verify_fn(seed, output, program_io.panic, proof);
-    println!("verify time: {:.3}s, valid: {is_valid}", t.elapsed().as_secs_f64());
+    println!(
+        "verify time: {:.3}s, valid: {is_valid}",
+        t.elapsed().as_secs_f64()
+    );
 
     // B2 BOUND e2e at mult_bench scale: welds + sidecar gadget + commitment
     // equality against the main proof.
@@ -199,8 +230,7 @@ pub fn main() {
         let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
         let _ = guest::analyze_mult_bench(seed);
         let mb_log = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
-        let blob =
-            jolt_inlines_edwards_bls12::sequence_builder::build_record_blob_padded(&mb_log);
+        let blob = jolt_inlines_edwards_bls12::sequence_builder::build_record_blob_padded(&mb_log);
         let advice_bytes =
             jolt_sdk::postcard::to_stdvec(&jolt_sdk::UntrustedAdvice::new(blob.as_slice()))
                 .expect("advice serialization");
@@ -226,7 +256,10 @@ pub fn main() {
         );
         assert_eq!(output_b, output, "bound output mismatch");
         let bound_valid = verify_b(seed, output_b, io_b.panic, proof_b.clone());
-        assert!(bound_valid, "MULT_BENCH BOUND GATE FAILED: proof did not verify");
+        assert!(
+            bound_valid,
+            "MULT_BENCH BOUND GATE FAILED: proof did not verify"
+        );
 
         let setup = &prover_pp_b.generators;
         let verifier_setup = jolt_sdk::PCS::setup_verifier(setup);
@@ -292,7 +325,12 @@ mod tests {
                 .map(|i| fq_from_dec(i.as_str().unwrap()))
                 .collect();
             let expected = fq_from_dec(case["output"].as_str().unwrap());
-            assert_eq!(guest::poseidon2_hash(&inputs), expected, "inputs {:?}", case["inputs"]);
+            assert_eq!(
+                guest::poseidon2_hash(&inputs),
+                expected,
+                "inputs {:?}",
+                case["inputs"]
+            );
         }
     }
 
@@ -307,7 +345,12 @@ mod tests {
                 .map(|i| fq_from_dec(i.as_str().unwrap()))
                 .collect();
             let expected = fq_from_dec(case["output"].as_str().unwrap());
-            assert_eq!(guest::poseidon4_hash(&inputs), expected, "psd4 inputs {:?}", case["inputs"]);
+            assert_eq!(
+                guest::poseidon4_hash(&inputs),
+                expected,
+                "psd4 inputs {:?}",
+                case["inputs"]
+            );
         }
     }
 

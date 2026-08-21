@@ -89,12 +89,7 @@ where
     #[doc(hidden)]
     pub fn raw_challenge_bytes(&mut self, out: &mut [u8]) {
         self.challenge_bytes(out);
-        crate::event_log::record(
-            self.instance,
-            "raw_challenge",
-            out,
-            &D::digest(&*out)[..],
-        );
+        crate::event_log::record(self.instance, "raw_challenge", out, &D::digest(&*out)[..]);
     }
 
     #[inline]

@@ -80,6 +80,20 @@ pub fn decode_header_word(word: u64) -> Result<(usize, usize), &'static str> {
     if bytes[size..].iter().any(|&b| b != 0) {
         return Err("header word carries non-zero bytes after the varint");
     }
+    // Reject non-canonical (over-long) varints: the guest derives its pad
+    // from the DECODED length via the minimal encoding, so accepting a
+    // non-minimal header here would let the verifier and the guest compute
+    // different pad rules from the same committed bytes.
+    let minimal = match len {
+        0..0x80 => 1,
+        0x80..0x4000 => 2,
+        0x4000..0x20_0000 => 3,
+        0x20_0000..0x1000_0000 => 4,
+        _ => 5,
+    };
+    if size != minimal {
+        return Err("header varint is not minimally encoded");
+    }
     Ok((len as usize, size))
 }
 
@@ -143,11 +157,7 @@ fn interpolate_corners<F: JoltField>(corners: &[F], r: &[F::Challenge], num_vars
     let r_f: Vec<F> = r.iter().map(|c| (*c).into()).collect();
     let table = eq_table::<F>(&r_f);
     debug_assert_eq!(table.len(), 1 << num_vars);
-    corners
-        .iter()
-        .zip(table.iter())
-        .map(|(v, e)| *v * *e)
-        .sum()
+    corners.iter().zip(table.iter()).map(|(v, e)| *v * *e).sum()
 }
 
 /// Build the advice-region word vector exactly as the prover pipeline does,
@@ -158,6 +168,9 @@ pub fn region_words(
     advice_bytes: &[u8],
     max_untrusted_advice_size: usize,
 ) -> Result<Vec<u64>, &'static str> {
+    if !max_untrusted_advice_size.is_multiple_of(8) {
+        return Err("max_untrusted_advice_size must be a multiple of 8");
+    }
     if advice_bytes.len() > max_untrusted_advice_size {
         return Err("advice bytes exceed max_untrusted_advice_size");
     }
@@ -169,7 +182,10 @@ pub fn region_words(
 /// Check every parsed row satisfies `x·y = w·q + z` over the integers,
 /// returning Err (not panicking) on a violating record so the prover API
 /// keeps its Result contract even on malformed blobs.
-fn validate_rows(rows: &[[u64; RECORD_WORDS]], params: &FieldAccelParams) -> Result<(), &'static str> {
+fn validate_rows(
+    rows: &[[u64; RECORD_WORDS]],
+    params: &FieldAccelParams,
+) -> Result<(), &'static str> {
     let q = params.modulus();
     for row in rows {
         let rec = row_to_record(row);
@@ -186,7 +202,10 @@ fn validate_rows(rows: &[[u64; RECORD_WORDS]], params: &FieldAccelParams) -> Res
 /// parallel map; large sidecar commitments would spawn hundreds of pools
 /// concurrently and hit the OS thread cap (EAGAIN). Running our PCS work
 /// inside one small dedicated pool caps concurrent chunk-pool creation.
-#[expect(clippy::expect_used, reason = "pool construction failure is unrecoverable")]
+#[expect(
+    clippy::expect_used,
+    reason = "pool construction failure is unrecoverable"
+)]
 fn pcs_pool() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
@@ -219,6 +238,9 @@ where
     PCS: CommitmentScheme<Field = F>,
 {
     let words = region_words(advice_bytes, max_untrusted_advice_size)?;
+    if !words.len().is_power_of_two() {
+        return Err("region word count must be a power of two");
+    }
     let poly = MultilinearPolynomial::from(words);
     let _guard = DoryGlobals::initialize_context(
         1,
@@ -365,32 +387,42 @@ where
                 transcript,
             )
         });
-        let (header_opening, _) = pcs_pool()
-            .install(|| PCS::prove(setup, &advice_poly, &header_point, Some(advice_hint), transcript));
+        let (header_opening, _) = pcs_pool().install(|| {
+            PCS::prove(
+                setup,
+                &advice_poly,
+                &header_point,
+                Some(advice_hint),
+                transcript,
+            )
+        });
         (advice_opening, header_opening)
     };
     let aux_opening = {
         let _guard =
             DoryGlobals::initialize_context(1, aux_poly.len(), DoryContext::UntrustedAdvice, None);
         let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
-        let (aux_opening, _) =
-            pcs_pool().install(|| PCS::prove(setup, &aux_poly, &aux_point, Some(aux_hint), transcript));
+        let (aux_opening, _) = pcs_pool()
+            .install(|| PCS::prove(setup, &aux_poly, &aux_point, Some(aux_hint), transcript));
         aux_opening
     };
 
-    Ok((FieldAccelBoundProof {
-        aux_commitment,
-        log_rows,
-        round_polys,
-        word_corner_evals,
-        aux_corner_evals,
-        header_word,
-        advice_claim,
-        advice_opening,
-        header_opening,
-        aux_claim,
-        aux_opening,
-    }, advice_commitment))
+    Ok((
+        FieldAccelBoundProof {
+            aux_commitment,
+            log_rows,
+            round_polys,
+            word_corner_evals,
+            aux_corner_evals,
+            header_word,
+            advice_claim,
+            advice_opening,
+            header_opening,
+            aux_claim,
+            aux_opening,
+        },
+        advice_commitment,
+    ))
 }
 
 /// Verify the bound gadget AND its bridge to the main proof: checks that
@@ -423,14 +455,15 @@ where
     let Some(main_commitment) = main_untrusted_advice_commitment else {
         return Err("main proof carries no untrusted-advice commitment");
     };
-    let converted =
-        <PCS as crate::zkvm::proof::ProofCommitmentScheme<F>>::commitment_into_verifier(
-            advice_commitment.clone(),
-        );
+    let converted = <PCS as crate::zkvm::proof::ProofCommitmentScheme<F>>::commitment_into_verifier(
+        advice_commitment.clone(),
+    );
     if &converted != main_commitment {
-        return Err("advice commitment does not match the main proof's untrusted_advice_commitment");
+        return Err(
+            "advice commitment does not match the main proof's untrusted_advice_commitment",
+        );
     }
-    verify_field_accel_bound::<F, PCS, T>(
+    verify_field_accel_bound_unbridged::<F, PCS, T>(
         proof,
         advice_commitment,
         max_untrusted_advice_size,
@@ -440,13 +473,18 @@ where
     )
 }
 
-/// Verify the bound gadget against an advice-region commitment. Prefer
-/// [`verify_field_accel_bound_bridged`], which also performs the equality
-/// check against the main proof's `untrusted_advice_commitment`; calling
-/// this directly is sound ONLY if the caller has bound `advice_commitment`
-/// to the main proof some other way. `max_untrusted_advice_size` is the
-/// verifier-known memory layout constant of the guest.
-pub fn verify_field_accel_bound<F, PCS, T>(
+/// Verify the bound gadget against an advice-region commitment WITHOUT the
+/// main-proof bridge. Prefer [`verify_field_accel_bound_bridged`], which
+/// also performs the equality check against the main proof's
+/// `untrusted_advice_commitment`; this unbridged form is sound ONLY if the
+/// caller has bound `advice_commitment` to the main proof some other way
+/// (it exists for standalone gadget measurement). Note the unbridged
+/// verifier's accepted region language is slightly broader than the
+/// guest's: pad words 1..15 are not opened here — in the composed protocol
+/// their zeroness is enforced by the guest weld (`bind::init`).
+/// `max_untrusted_advice_size` is the verifier-known memory layout
+/// constant of the guest.
+pub fn verify_field_accel_bound_unbridged<F, PCS, T>(
     proof: &FieldAccelBoundProof<F, PCS>,
     advice_commitment: &PCS::Commitment,
     max_untrusted_advice_size: usize,
@@ -525,8 +563,12 @@ where
     let aux_point = be_point::<F>(proof.log_rows + AUX_COL_BITS, &r_row, &sigma);
 
     {
-        let _guard =
-            DoryGlobals::initialize_context(1, region_word_count, DoryContext::UntrustedAdvice, None);
+        let _guard = DoryGlobals::initialize_context(
+            1,
+            region_word_count,
+            DoryContext::UntrustedAdvice,
+            None,
+        );
         let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
         PCS::verify(
             &proof.advice_opening,
@@ -731,19 +773,16 @@ mod roundtrip_tests {
         // the advice commitment the verifier holds (from the main proof, in
         // the e2e flow) — recompute independently and require it to match
         // the one the prover returned
-        let (advice_commitment, _) = commit_advice_region::<Fr, DoryCommitmentScheme>(
-            &advice_bytes,
-            MAX_ADVICE,
-            &setup,
-        )
-        .unwrap();
+        let (advice_commitment, _) =
+            commit_advice_region::<Fr, DoryCommitmentScheme>(&advice_bytes, MAX_ADVICE, &setup)
+                .unwrap();
         assert_eq!(
             advice_commitment, prover_commitment,
             "prover-returned commitment must equal an independent recompute"
         );
 
         let mut vt = Blake2bTranscript::new(b"fa_bound_test");
-        verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
+        verify_field_accel_bound_unbridged::<Fr, DoryCommitmentScheme, _>(
             &proof,
             &advice_commitment,
             MAX_ADVICE,
@@ -757,19 +796,33 @@ mod roundtrip_tests {
         let mut bad = proof.clone();
         bad.word_corner_evals[3] += Fr::from(1u64);
         let mut vt = Blake2bTranscript::new(b"fa_bound_test");
-        assert!(verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
-            &bad, &advice_commitment, MAX_ADVICE, &params(), &verifier_setup, &mut vt
-        )
-        .is_err());
+        assert!(
+            verify_field_accel_bound_unbridged::<Fr, DoryCommitmentScheme, _>(
+                &bad,
+                &advice_commitment,
+                MAX_ADVICE,
+                &params(),
+                &verifier_setup,
+                &mut vt
+            )
+            .is_err()
+        );
 
         // negative: tampered aux corner eval
         let mut bad = proof.clone();
         bad.aux_corner_evals[7] += Fr::from(1u64);
         let mut vt = Blake2bTranscript::new(b"fa_bound_test");
-        assert!(verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
-            &bad, &advice_commitment, MAX_ADVICE, &params(), &verifier_setup, &mut vt
-        )
-        .is_err());
+        assert!(
+            verify_field_accel_bound_unbridged::<Fr, DoryCommitmentScheme, _>(
+                &bad,
+                &advice_commitment,
+                MAX_ADVICE,
+                &params(),
+                &verifier_setup,
+                &mut vt
+            )
+            .is_err()
+        );
 
         // negative: forged header word (count shift)
         let mut bad = proof.clone();
@@ -781,26 +834,37 @@ mod roundtrip_tests {
             u64::from_le_bytes(b)
         };
         let mut vt = Blake2bTranscript::new(b"fa_bound_test");
-        assert!(verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
-            &bad, &advice_commitment, MAX_ADVICE, &params(), &verifier_setup, &mut vt
-        )
-        .is_err());
+        assert!(
+            verify_field_accel_bound_unbridged::<Fr, DoryCommitmentScheme, _>(
+                &bad,
+                &advice_commitment,
+                MAX_ADVICE,
+                &params(),
+                &verifier_setup,
+                &mut vt
+            )
+            .is_err()
+        );
 
         // negative: verifying against a different advice commitment
         let mut other_bytes = advice_bytes.clone();
         let flip = other_bytes.len() - 5;
         other_bytes[flip] ^= 1;
-        let (other_commitment, _) = commit_advice_region::<Fr, DoryCommitmentScheme>(
-            &other_bytes,
-            MAX_ADVICE,
-            &setup,
-        )
-        .unwrap();
+        let (other_commitment, _) =
+            commit_advice_region::<Fr, DoryCommitmentScheme>(&other_bytes, MAX_ADVICE, &setup)
+                .unwrap();
         let mut vt = Blake2bTranscript::new(b"fa_bound_test");
-        assert!(verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
-            &proof, &other_commitment, MAX_ADVICE, &params(), &verifier_setup, &mut vt
-        )
-        .is_err());
+        assert!(
+            verify_field_accel_bound_unbridged::<Fr, DoryCommitmentScheme, _>(
+                &proof,
+                &other_commitment,
+                MAX_ADVICE,
+                &params(),
+                &verifier_setup,
+                &mut vt
+            )
+            .is_err()
+        );
 
         // negative: false record (z+1) — the honest prover refuses (record
         // constructor asserts), so tamper at the byte level and try to prove
@@ -823,7 +887,10 @@ mod roundtrip_tests {
             &setup,
             &mut pt,
         );
-        assert!(result.is_err(), "prover must refuse a false record with Err, not panic");
+        assert!(
+            result.is_err(),
+            "prover must refuse a false record with Err, not panic"
+        );
     }
 
     #[test]
@@ -832,7 +899,7 @@ mod roundtrip_tests {
         let setup = DoryCommitmentScheme::setup_prover(14);
         let verifier_setup = DoryCommitmentScheme::setup_verifier(&setup);
         let mut pt = Blake2bTranscript::new(b"fa_bound_zero");
-        let (proof, advice_commitment) = prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
+        let (proof, prover_commitment) = prove_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
             &advice_bytes,
             MAX_ADVICE,
             &params(),
@@ -840,8 +907,13 @@ mod roundtrip_tests {
             &mut pt,
         )
         .unwrap();
+        // independent recompute, so the check is not circular
+        let (advice_commitment, _) =
+            commit_advice_region::<Fr, DoryCommitmentScheme>(&advice_bytes, MAX_ADVICE, &setup)
+                .unwrap();
+        assert_eq!(advice_commitment, prover_commitment);
         let mut vt = Blake2bTranscript::new(b"fa_bound_zero");
-        verify_field_accel_bound::<Fr, DoryCommitmentScheme, _>(
+        verify_field_accel_bound_unbridged::<Fr, DoryCommitmentScheme, _>(
             &proof,
             &advice_commitment,
             MAX_ADVICE,

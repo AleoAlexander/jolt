@@ -24,7 +24,10 @@ pub fn main() {
     let out: [u64; 4] =
         jolt_sdk::postcard::from_bytes(&summary.io_device.outputs).expect("guest output");
     assert_eq!(out, expected_chain(seed), "guest/host mismatch");
-    println!("fqmul_chain: {cycles} cycles for 1000 field ops ({} cycles/op)", cycles / 1000);
+    println!(
+        "fqmul_chain: {cycles} cycles for 1000 field ops ({} cycles/op)",
+        cycles / 1000
+    );
 
     let ark_summary = guest::analyze_ark_chain(seed);
     let ark_cycles = ark_summary.trace_len();
@@ -37,7 +40,11 @@ pub fn main() {
     // B2: build the record blob from the pass-1 log (op order = execution
     // order); the bound chain below re-executes the same 1000 ops.
     let pass1_records = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
-    assert_eq!(pass1_records.len(), 1000, "pass-1 log should hold the chain's ops");
+    assert_eq!(
+        pass1_records.len(),
+        1000,
+        "pass-1 log should hold the chain's ops"
+    );
     let blob =
         jolt_inlines_edwards_bls12::sequence_builder::build_record_blob_padded(&pass1_records);
     let bound_summary =
@@ -85,7 +92,9 @@ pub fn main() {
         FieldAccelParams, FieldAccelWitness, FieldOpRecord,
     };
 
-    let params = FieldAccelParams { modulus_limbs: MODULUS };
+    let params = FieldAccelParams {
+        modulus_limbs: MODULUS,
+    };
     let log = take_field_op_log();
     let records: Vec<FieldOpRecord> = log
         .iter()
@@ -97,8 +106,11 @@ pub fn main() {
     let log_n = witness.padded_len().trailing_zeros() as usize;
 
     let now = std::time::Instant::now();
-    let gadget_proof =
-        prove_field_accel::<jolt_sdk::F, _>(&witness, &params, &mut Blake2bTranscript::new(b"field_accel"));
+    let gadget_proof = prove_field_accel::<jolt_sdk::F, _>(
+        &witness,
+        &params,
+        &mut Blake2bTranscript::new(b"field_accel"),
+    );
     let gadget_prove_time = now.elapsed().as_secs_f64();
 
     let now = std::time::Instant::now();
@@ -121,7 +133,8 @@ pub fn main() {
     // a tampered blob spoils the proof.
     println!("\n=== B2 weld gate ===");
     let mut program_b = guest::compile_fqmul_chain_bound(target_dir);
-    let shared_b = guest::preprocess_shared_fqmul_chain_bound(&mut program_b).expect("preprocessing");
+    let shared_b =
+        guest::preprocess_shared_fqmul_chain_bound(&mut program_b).expect("preprocessing");
     let prover_pp_b = guest::preprocess_prover_fqmul_chain_bound(shared_b.clone());
     let verifier_pp_b = guest::preprocess_verifier_fqmul_chain_bound(
         shared_b,
@@ -136,7 +149,10 @@ pub fn main() {
     println!("bound prover time: {:.2}s", now.elapsed().as_secs_f64());
     assert_eq!(output_b, expected_chain(seed), "bound output mismatch");
     let bound_valid = verify_b(seed, output_b, io_b.panic, proof_b.clone());
-    assert!(bound_valid, "B2 WELD GATE FAILED: honest bound proof did not verify");
+    assert!(
+        bound_valid,
+        "B2 WELD GATE FAILED: honest bound proof did not verify"
+    );
     println!("B2 weld gate PASSED: bound chain proves and verifies with honest blob");
 
     // Negative: flip one byte of record 0's x value — the weld must spoil.
@@ -150,17 +166,19 @@ pub fn main() {
     match neg {
         Ok(true) => panic!("B2 WELD NEGATIVE FAILED: tampered blob verified"),
         Ok(false) => println!("B2 weld negative PASSED: tampered blob rejected by verifier"),
-        Err(_) => println!("B2 weld negative PASSED: tampered blob spoiled the trace (prover abort)"),
+        Err(_) => {
+            println!("B2 weld negative PASSED: tampered blob spoiled the trace (prover abort)")
+        }
     }
 
     // B2 BOUND GATE: the sidecar gadget proof — modular identity over the
     // SAME committed advice region the welds bind to, with Dory-bound
     // evaluations, digit range checks, and the header-derived record count.
     println!("\n=== B2 bound gate ===");
+    use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
     use jolt_prover_legacy::zkvm::field_accel::bound::{
         prove_field_accel_bound, verify_field_accel_bound_bridged,
     };
-    use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
 
     const MAX_ADVICE: usize = 262144; // fqmul_chain_bound's max_untrusted_advice_size
 
@@ -174,15 +192,19 @@ pub fn main() {
 
     let now = std::time::Instant::now();
     let mut pt = jolt_prover_legacy::transcripts::Blake2bTranscript::new(b"field_accel_bound");
-    let (bound_proof, advice_commitment) = prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
-        &advice_bytes,
-        MAX_ADVICE,
-        &params,
-        setup,
-        &mut pt,
-    )
-    .expect("bound gadget proving failed");
-    println!("bound gadget prover time: {:.3}s", now.elapsed().as_secs_f64());
+    let (bound_proof, advice_commitment) =
+        prove_field_accel_bound::<jolt_sdk::F, jolt_sdk::PCS, _>(
+            &advice_bytes,
+            MAX_ADVICE,
+            &params,
+            setup,
+            &mut pt,
+        )
+        .expect("bound gadget proving failed");
+    println!(
+        "bound gadget prover time: {:.3}s",
+        now.elapsed().as_secs_f64()
+    );
 
     // Bridged verification: the library checks the sidecar's advice
     // commitment equals the main proof's untrusted_advice_commitment, then

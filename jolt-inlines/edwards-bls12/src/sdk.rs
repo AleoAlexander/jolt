@@ -189,12 +189,15 @@ impl Fq {
 #[cfg(all(target_arch = "riscv64", not(feature = "host")))]
 impl Fq {
     /// self / divisor via the DIVQ inline (advice inverse, verified by
-    /// multiplication in the sequence). Division by zero spoils the proof
-    /// in-guest, BEFORE the inline runs or the result is welded — this
-    /// guard is what the B2 soundness inventory relies on for the
-    /// zero-divisor case (a divisor of 0 admits no valid record).
+    /// multiplication in the sequence). A zero or non-canonical divisor
+    /// spoils the proof in-guest, BEFORE the inline runs or the result is
+    /// welded — this guard is what the B2 soundness inventory relies on
+    /// for the zero-divisor case (a divisor of 0 admits no valid record).
+    /// The canonicity leg matters: `is_zero()` is a limb compare, so a
+    /// non-canonical representation of zero (e == MODULUS) would slip a
+    /// zero divisor past a bare zero check.
     pub fn div(&self, divisor: &Fq) -> Fq {
-        if divisor.is_zero() {
+        if divisor.is_zero() || is_fq_non_canonical(&divisor.e) {
             jolt_inlines_sdk::spoil_proof();
         }
         let mut e = [0u64; 4];
@@ -259,9 +262,13 @@ impl Fq {
 // Constants are locked to arkworks by tests (curve_constants_match_arkworks).
 
 /// d = 3021
-pub const COEFF_D: Fq = Fq { e: [0x0000000000000bcd, 0, 0, 0] };
+pub const COEFF_D: Fq = Fq {
+    e: [0x0000000000000bcd, 0, 0, 0],
+};
 /// 2d = 6042
-const TWO_D: Fq = Fq { e: [0x000000000000179a, 0, 0, 0] };
+const TWO_D: Fq = Fq {
+    e: [0x000000000000179a, 0, 0, 0],
+};
 
 const GENERATOR_X: Fq = Fq {
     e: [

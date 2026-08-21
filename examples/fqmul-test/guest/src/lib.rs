@@ -21,7 +21,12 @@ fn fqmul_chain(seed: u64) -> [u64; 4] {
 /// 16-word record block in the committed untrusted-advice region. `init`
 /// verifies the self-anchoring pad rule, `finalize` requires every block
 /// consumed; any mismatch spoils the proof.
-#[jolt::provable(stack_size = 131072, heap_size = 524288, max_trace_length = 2097152, max_untrusted_advice_size = 262144)]
+#[jolt::provable(
+    stack_size = 131072,
+    heap_size = 524288,
+    max_trace_length = 2097152,
+    max_untrusted_advice_size = 262144
+)]
 fn fqmul_chain_bound(seed: u64, records: jolt::UntrustedAdvice<&[u8]>) -> [u64; 4] {
     jolt_inlines_edwards_bls12::bind::init(&records);
     let three = Fq::from_u64(3);
