@@ -497,6 +497,9 @@ where
     PCS: CommitmentScheme<Field = F>,
     T: Transcript,
 {
+    if !max_untrusted_advice_size.is_multiple_of(8) {
+        return Err("max_untrusted_advice_size must be a multiple of 8");
+    }
     let region_word_count = max_untrusted_advice_size / 8;
     if !region_word_count.is_power_of_two() {
         return Err("region word count must be a power of two");

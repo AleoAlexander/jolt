@@ -95,7 +95,7 @@ pub fn main() {
         // end-to-end gadget cost for the RFC.
         use jolt_prover_legacy::poly::commitment::commitment_scheme::CommitmentScheme as _;
         use jolt_prover_legacy::zkvm::field_accel::bound::{
-            prove_field_accel_bound, verify_field_accel_bound_unbridged,
+            commit_advice_region, prove_field_accel_bound, verify_field_accel_bound_unbridged,
         };
         const MAX_ADVICE_TRANSFER: usize = 8388608; // 2^23 bytes = 2^20 words
 
@@ -123,6 +123,19 @@ pub fn main() {
             )
             .expect("bound gadget proving failed");
         let bound_prove_s = t.elapsed().as_secs_f64();
+        // Independent recompute so the check is not circular (no main proof
+        // exists at this scale, so this replaces the bridge, not just
+        // supplements it).
+        let (recomputed, _) = commit_advice_region::<jolt_sdk::F, jolt_sdk::PCS>(
+            &advice_bytes,
+            MAX_ADVICE_TRANSFER,
+            &setup,
+        )
+        .expect("advice commitment recompute failed");
+        assert_eq!(
+            recomputed, advice_commitment,
+            "prover-returned commitment must equal an independent recompute"
+        );
         let t = std::time::Instant::now();
         let mut vt = Blake2bTranscript::new(b"field_accel_bound");
         verify_field_accel_bound_unbridged::<jolt_sdk::F, jolt_sdk::PCS, _>(

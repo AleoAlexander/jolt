@@ -233,6 +233,13 @@ impl Fq {
 #[cfg(feature = "host")]
 impl Fq {
     pub fn div(&self, divisor: &Fq) -> Fq {
+        // Mirror the guest guard: a zero or non-canonical divisor must fail
+        // on the host too, or a pass-1 host run silently reduces via
+        // arkworks while the guest proving run spoils — same program,
+        // divergent outcomes.
+        if divisor.is_zero() || is_fq_non_canonical(&divisor.e) {
+            jolt_inlines_sdk::spoil_proof();
+        }
         let inv = ArkFq::new(BigInt(divisor.e))
             .inverse()
             .expect("division by zero in edwards-bls12 base field");
