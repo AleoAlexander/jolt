@@ -69,6 +69,44 @@ advice commitment object but not its transcript; in-pipeline integration
 (shared transcript, stage-8 batched openings) is upstream's design call
 (RFC question 2). Guest-side canonicity posture unchanged (below).
 
+## Deferred from the Aug 21 code review (recorded, not fixed)
+
+An 8-angle adversarial code review (36 candidates, 10 verified findings)
+confirmed the B2 cryptography sound and its findings were fixed at
+891cabae0, except these five, each deferred with cause:
+
+1. **Curve-agnostic weld module.** bind.rs is modulus-generic but lives in
+   the edwards-bls12 crate with singleton static-mut state: a second
+   accelerated curve would copy-paste it, and one guest can never weld two
+   accelerated fields (interleaved block streams). Fix = a per-stream bind
+   module in jolt-inlines-sdk — API design work owed to the in-pipeline
+   integration, needed only when a second curve exists.
+2. **Shared blob-schema module.** The record-blob wire format (varint
+   header, pad rule, 128-byte blocks) has four hand-written
+   implementations: guest (bind.rs), host encoder (sequence_builder.rs),
+   prover/verifier parser (bound.rs), test encoder. A schema change must
+   hit all four or guest and verifier silently disagree. Fix = one shared
+   no_std schema crate spanning guest and prover sides — a new common
+   dependency that in-pipeline integration may obsolete (the blob format
+   itself disappears under cycle-indexed binding).
+3. **Sumcheck/eq dedup.** zero_check_verify and eq_at re-implement
+   ClearSumcheckProof::verify / EqPolynomial::mle. Swapping them changes
+   transcript byte-sequences (compressed round polys, challenge
+   derivation) for zero functional gain now; do it when the gadget adopts
+   the shared sumcheck infrastructure during integration.
+4. **Vendored-MSM thread churn.** The arkworks fork builds a thread pool
+   PER MSM CHUNK and pool drops don't join threads — at 2^24-element
+   commitments the churn outruns thread reaping and hits the OS cap
+   (EAGAIN). pcs_pool here is a caller-side cap (2 threads, 64 MB stacks)
+   that leaves commitment throughput on the table; the real fix belongs in
+   the vendored MSM (use the ambient pool) and should be reported
+   upstream — it bites any large-commitment caller.
+5. **Feature-split baselines.** field-accel-bind compiles a ~4 cyc/op
+   no-op weld check into unbound guests (see Measurement note above).
+   A clean fix needs per-provable-fn feature control the #[jolt::provable]
+   macro doesn't offer; the RFC's headline baselines use feature-off
+   builds instead.
+
 ## Historical inventory (pre-B2, resolved as described above)
 1. Advice results are unbound in the main proof (B0 ops verify nothing
    in-trace); binding = the gadget, which is a *side proof* here.
