@@ -15,8 +15,10 @@
 pub mod sumcheck;
 
 /// B2 bound gadget: the zero-check with commitment-bound evaluations
-/// (advice-region words + committed aux columns).
-#[cfg(any(test, feature = "field-accel-prototype"))]
+/// (advice-region words + committed aux columns). Excluded under `zk`
+/// like the akita mode: the sidecar is non-ZK by design (blinded zk
+/// commitments break its commitment-equality bridge and clear openings).
+#[cfg(all(any(test, feature = "field-accel-prototype"), not(feature = "zk")))]
 pub mod bound;
 
 use num_bigint::BigUint;

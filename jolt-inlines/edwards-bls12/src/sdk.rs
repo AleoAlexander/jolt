@@ -242,7 +242,7 @@ impl Fq {
         }
         let inv = ArkFq::new(BigInt(divisor.e))
             .inverse()
-            .expect("division by zero in edwards-bls12 base field");
+            .expect("unreachable: divisor is guarded canonical and nonzero");
         Fq {
             e: (ArkFq::new(BigInt(self.e)) * inv).into_bigint().0,
         }
@@ -251,7 +251,11 @@ impl Fq {
 
 impl Fq {
     pub fn inverse(&self) -> Option<Fq> {
-        if self.is_zero() {
+        // Non-canonical values are uninvertible under this API rather than
+        // spoiling inside div: callers use inverse() precisely to test
+        // invertibility, so the Option contract must hold for every input
+        // a release build can construct (from_canonical is debug-only).
+        if self.is_zero() || is_fq_non_canonical(&self.e) {
             None
         } else {
             Some(Fq::ONE.div(self))

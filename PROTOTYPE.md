@@ -128,7 +128,13 @@ Distinct from the protocol-design requirements above — these are code-level:
   non-canonical operands are accepted at the input boundary. Load-bearing
   because Fq derives Eq on raw limbs and add()/the overflow argument assume
   < q. Real (small) soundness crack in release; fix = reduce or spoil_proof
-  instead of debug_assert. Present at phase0-complete and HEAD.
+  instead of debug_assert. Present at phase0-complete and HEAD. B2
+  manifestation (review 4): the host advice path reduces non-canonical
+  limbs via arkworks before logging while the weld compares raw guest
+  limbs, so a guest holding a serde-constructed non-canonical Fq spoils an
+  otherwise honest run — mul/square have no input guard (div now does).
+  Unreachable through in-tree constructors; the real fix is the type-level
+  canonicity enforcement above.
 - **load_fq ...unwrap_or(0)** — FIXED by the 2026-08-17 rebase: upstream's
   InlineAdviceContext API returns Result, so a failed memory load now surfaces
   as InlineAdviceError instead of silently becoming limb 0. (Was: latent

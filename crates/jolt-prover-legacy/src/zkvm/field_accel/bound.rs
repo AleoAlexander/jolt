@@ -160,6 +160,21 @@ fn interpolate_corners<F: JoltField>(corners: &[F], r: &[F::Challenge], num_vars
     corners.iter().zip(table.iter()).map(|(v, e)| *v * *e).sum()
 }
 
+/// The single spelling of the region-layout invariant: the advice region
+/// must be a whole number of words and a power-of-two word count. Every
+/// prover and verifier path derives its word count through here, so the
+/// accepted languages cannot drift apart.
+pub fn region_word_count(max_untrusted_advice_size: usize) -> Result<usize, &'static str> {
+    if !max_untrusted_advice_size.is_multiple_of(8) {
+        return Err("max_untrusted_advice_size must be a multiple of 8");
+    }
+    let words = max_untrusted_advice_size / 8;
+    if !words.is_power_of_two() {
+        return Err("region word count must be a power of two");
+    }
+    Ok(words)
+}
+
 /// Build the advice-region word vector exactly as the prover pipeline does,
 /// by calling the pipeline's own packing helper (`populate_memory_states`),
 /// zero-padded to max_untrusted_advice_size / 8 words. Errors instead of
@@ -168,9 +183,7 @@ pub fn region_words(
     advice_bytes: &[u8],
     max_untrusted_advice_size: usize,
 ) -> Result<Vec<u64>, &'static str> {
-    if !max_untrusted_advice_size.is_multiple_of(8) {
-        return Err("max_untrusted_advice_size must be a multiple of 8");
-    }
+    region_word_count(max_untrusted_advice_size)?;
     if advice_bytes.len() > max_untrusted_advice_size {
         return Err("advice bytes exceed max_untrusted_advice_size");
     }
@@ -238,9 +251,6 @@ where
     PCS: CommitmentScheme<Field = F>,
 {
     let words = region_words(advice_bytes, max_untrusted_advice_size)?;
-    if !words.len().is_power_of_two() {
-        return Err("region word count must be a power of two");
-    }
     let poly = MultilinearPolynomial::from(words);
     let _guard = DoryGlobals::initialize_context(
         1,
@@ -300,9 +310,6 @@ where
     T: Transcript,
 {
     let words = region_words(advice_bytes, max_untrusted_advice_size)?;
-    if !words.len().is_power_of_two() {
-        return Err("region word count must be a power of two");
-    }
     let advice_vars = words.len().trailing_zeros() as usize;
 
     let (_n, rows) = parse_region_rows(&words)?;
@@ -497,13 +504,7 @@ where
     PCS: CommitmentScheme<Field = F>,
     T: Transcript,
 {
-    if !max_untrusted_advice_size.is_multiple_of(8) {
-        return Err("max_untrusted_advice_size must be a multiple of 8");
-    }
-    let region_word_count = max_untrusted_advice_size / 8;
-    if !region_word_count.is_power_of_two() {
-        return Err("region word count must be a power of two");
-    }
+    let region_word_count = region_word_count(max_untrusted_advice_size)?;
     let advice_vars = region_word_count.trailing_zeros() as usize;
 
     // Derive the record count from the committed header word — no trusted
