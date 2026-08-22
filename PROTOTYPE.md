@@ -16,13 +16,13 @@ re-run green and numbers re-measured (see RESULTS.md `rebase-20260817`).
   64-bit-word identity with committed offset carries + 2-bit digit range
   checks, Dory-bound evaluations, and a header-anchored record count
   (bound.rs). Measured: fqmul 87 cyc/op bound (vs 45 unbound / 252
-  software); usdcx 19.57M cycles bound vs 83.58M software (4.3x; 6.0x
-  unbound at 13.94M, all three in one binary — bound improved 2026-08-22 when Poseidon table constants
-  became build-time-validated static Fq: the win is removing per-element
-  table CONSTRUCTION from the hot loops, plus the canonicity tax one
-  intermediate commit had briefly made unconditional; the July baseline's
-  debug_assert compiled out and never paid it); bound gadget proves the
-  46,056-op log in ~9.5s, verifies in ~0.15s; mult_bench bound end-to-end (welds + sidecar + commitment
+  software); usdcx FAIR-BASELINE numbers (2026-08-22, software twin
+  KAT-pinned to the accelerated output, Montgomery constants hoisted the
+  way real software keeps them): 48.86M software / 13.95M unbound (3.5x)
+  / 19.58M bound (2.5x). Earlier 5.8x/4.3x entries used a software twin
+  that re-converted constant tables per use — withdrawn as unfair; the
+  per-op 6.1x (252 vs 41 cyc) stands. Bound gadget proves the 46,056-op
+  log in ~9.5s, verifies in ~0.15s; mult_bench bound end-to-end (welds + sidecar + commitment
   equality) passes. Composition is a sidecar sharing the main proof's
   advice commitment object — in-pipeline integration is upstream's call
   (RFC question 2).

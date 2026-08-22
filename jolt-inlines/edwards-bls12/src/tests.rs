@@ -263,3 +263,58 @@ fn padded_blob_satisfies_guest_pad_rule() {
         assert_eq!(&blob[pad..pad + 8], &rec.0[0].to_le_bytes());
     }
 }
+
+#[test]
+fn serde_roundtrip_and_non_canonical_rejection() {
+    // roundtrip through a self-describing format
+    let x = Fq::from_u64(12345);
+    let json = serde_json::to_string(&x).unwrap();
+    let back: Fq = serde_json::from_str(&json).unwrap();
+    assert_eq!(x, back);
+    // non-canonical limbs (== MODULUS) must be rejected at deserialization
+    let bad = serde_json::to_string(&MODULUS).unwrap();
+    assert!(serde_json::from_str::<Fq>(&bad).is_err());
+    // and via postcard (the wire format guests actually use)
+    let bytes = jolt_postcard_roundtrip(&x);
+    assert_eq!(x, bytes);
+}
+
+fn jolt_postcard_roundtrip(x: &Fq) -> Fq {
+    let bytes = postcard::to_stdvec(x).unwrap();
+    postcard::from_bytes(&bytes).unwrap()
+}
+
+#[test]
+fn canonicity_predicates_agree() {
+    // boundary band around q plus random values: the runtime and const
+    // spellings of the canonicity predicate must never disagree
+    let mut cases: Vec<[u64; 4]> = vec![[0, 0, 0, 0], [1, 0, 0, 0], MODULUS, [u64::MAX; 4]];
+    for delta in 1..=4u64 {
+        let mut below = MODULUS;
+        below[0] -= delta;
+        let mut above = MODULUS;
+        above[0] += delta;
+        cases.push(below);
+        cases.push(above);
+    }
+    let mut s = 0xC0FFEEu64;
+    for _ in 0..1000 {
+        let mut limbs = [0u64; 4];
+        for limb in limbs.iter_mut() {
+            *limb = {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                s
+            };
+        }
+        cases.push(limbs);
+    }
+    for c in cases {
+        assert_eq!(
+            crate::sdk::predicates_agree_probe(&c).0,
+            crate::sdk::predicates_agree_probe(&c).1,
+            "{c:?}"
+        );
+    }
+}

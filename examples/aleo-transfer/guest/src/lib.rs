@@ -41,7 +41,8 @@ static POSEIDON2_ARK_FQ: [[Fq; 3]; POSEIDON2_ROUNDS] =
 static POSEIDON2_MDS_FQ: [[Fq; 3]; 3] = Fq::table_from_canonical_const(&vendored::POSEIDON2_MDS);
 static POSEIDON2_DOMAIN_FQ: Fq = Fq::from_canonical_const(vendored::POSEIDON2_DOMAIN);
 
-fn mds_row(row: &[Fq; 3], state: &[Fq; 3]) -> Fq {
+#[inline(always)]
+fn mds_row<const N: usize>(row: &[Fq; N], state: &[Fq; N]) -> Fq {
     // seed with the first product: one fewer software add per row
     let mut acc = row[0].mul(&state[0]);
     for (m, s) in row.iter().zip(state.iter()).skip(1) {
@@ -256,15 +257,6 @@ static POSEIDON4_ARK_FQ: [[Fq; 5]; POSEIDON4_ROUNDS] =
 static POSEIDON4_MDS_FQ: [[Fq; 5]; 5] = Fq::table_from_canonical_const(&vendored4::POSEIDON4_MDS);
 static POSEIDON4_DOMAIN_FQ: Fq = Fq::from_canonical_const(vendored4::POSEIDON4_DOMAIN);
 
-fn mds_row5(row: &[Fq; 5], state: &[Fq; 5]) -> Fq {
-    // seed with the first product: one fewer software add per row
-    let mut acc = row[0].mul(&state[0]);
-    for (m, s) in row.iter().zip(state.iter()).skip(1) {
-        acc = acc.add(&m.mul(s));
-    }
-    acc
-}
-
 pub fn poseidon4_perm(state: &mut [Fq; 5]) {
     let full = vendored4::POSEIDON4_FULL_ROUNDS;
     let partial = vendored4::POSEIDON4_PARTIAL_ROUNDS;
@@ -281,11 +273,11 @@ pub fn poseidon4_perm(state: &mut [Fq; 5]) {
             }
         }
         let new_state = [
-            mds_row5(&POSEIDON4_MDS_FQ[0], state),
-            mds_row5(&POSEIDON4_MDS_FQ[1], state),
-            mds_row5(&POSEIDON4_MDS_FQ[2], state),
-            mds_row5(&POSEIDON4_MDS_FQ[3], state),
-            mds_row5(&POSEIDON4_MDS_FQ[4], state),
+            mds_row(&POSEIDON4_MDS_FQ[0], state),
+            mds_row(&POSEIDON4_MDS_FQ[1], state),
+            mds_row(&POSEIDON4_MDS_FQ[2], state),
+            mds_row(&POSEIDON4_MDS_FQ[3], state),
+            mds_row(&POSEIDON4_MDS_FQ[4], state),
         ];
         *state = new_state;
     }
@@ -426,6 +418,49 @@ fn afq_from_limbs(limbs: &[u64; 4]) -> AFq {
     AFq::from_bigint(BigInt::new(*limbs)).expect("vendored constant exceeds modulus")
 }
 
+/// Poseidon constants converted to Montgomery form ONCE per soft run —
+/// real software keeps its constants in this form statically, so a
+/// per-call reconversion (the old phase0-style twins) pessimized the
+/// software baseline the accelerated columns are compared against.
+struct SoftTables {
+    ark2: [[AFq; 3]; POSEIDON2_ROUNDS],
+    mds2: [[AFq; 3]; 3],
+    ark4: [[AFq; 5]; POSEIDON4_ROUNDS],
+    mds4: [[AFq; 5]; 5],
+    domain4: AFq,
+}
+
+fn soft_tables() -> SoftTables {
+    let mut t = SoftTables {
+        ark2: [[AFq::zero(); 3]; POSEIDON2_ROUNDS],
+        mds2: [[AFq::zero(); 3]; 3],
+        ark4: [[AFq::zero(); 5]; POSEIDON4_ROUNDS],
+        mds4: [[AFq::zero(); 5]; 5],
+        domain4: afq_from_limbs(&vendored4::POSEIDON4_DOMAIN),
+    };
+    for (dst, src) in t.ark2.iter_mut().zip(vendored::POSEIDON2_ARK.iter()) {
+        for (d, c) in dst.iter_mut().zip(src.iter()) {
+            *d = afq_from_limbs(c);
+        }
+    }
+    for (dst, src) in t.mds2.iter_mut().zip(vendored::POSEIDON2_MDS.iter()) {
+        for (d, c) in dst.iter_mut().zip(src.iter()) {
+            *d = afq_from_limbs(c);
+        }
+    }
+    for (dst, src) in t.ark4.iter_mut().zip(vendored4::POSEIDON4_ARK.iter()) {
+        for (d, c) in dst.iter_mut().zip(src.iter()) {
+            *d = afq_from_limbs(c);
+        }
+    }
+    for (dst, src) in t.mds4.iter_mut().zip(vendored4::POSEIDON4_MDS.iter()) {
+        for (d, c) in dst.iter_mut().zip(src.iter()) {
+            *d = afq_from_limbs(c);
+        }
+    }
+    t
+}
+
 fn asbox17(x: AFq) -> AFq {
     let x2 = x.square();
     let x4 = x2.square();
@@ -433,13 +468,13 @@ fn asbox17(x: AFq) -> AFq {
     x8.square() * x
 }
 
-fn poseidon_perm_soft(state: &mut [AFq; 3]) {
+fn poseidon_perm_soft(state: &mut [AFq; 3], t: &SoftTables) {
     let full = vendored::POSEIDON2_FULL_ROUNDS;
     let partial = vendored::POSEIDON2_PARTIAL_ROUNDS;
     let partial_range = (full / 2)..(full / 2 + partial);
-    for round in 0..(full + partial) {
-        for (s, c) in state.iter_mut().zip(vendored::POSEIDON2_ARK[round].iter()) {
-            *s += afq_from_limbs(c);
+    for (round, ark_row) in t.ark2.iter().enumerate() {
+        for (s, c) in state.iter_mut().zip(ark_row.iter()) {
+            *s += c;
         }
         if partial_range.contains(&round) {
             state[0] = asbox17(state[0]);
@@ -450,21 +485,21 @@ fn poseidon_perm_soft(state: &mut [AFq; 3]) {
         }
         let mut new_state = [AFq::zero(); 3];
         for (i, ns) in new_state.iter_mut().enumerate() {
-            for (m, s) in vendored::POSEIDON2_MDS[i].iter().zip(state.iter()) {
-                *ns += afq_from_limbs(m) * s;
+            for (m, s) in t.mds2[i].iter().zip(state.iter()) {
+                *ns += *m * s;
             }
         }
         *state = new_state;
     }
 }
 
-fn poseidon4_perm_soft(state: &mut [AFq; 5]) {
+fn poseidon4_perm_soft(state: &mut [AFq; 5], t: &SoftTables) {
     let full = vendored4::POSEIDON4_FULL_ROUNDS;
     let partial = vendored4::POSEIDON4_PARTIAL_ROUNDS;
     let partial_range = (full / 2)..(full / 2 + partial);
-    for round in 0..(full + partial) {
-        for (s, c) in state.iter_mut().zip(vendored4::POSEIDON4_ARK[round].iter()) {
-            *s += afq_from_limbs(c);
+    for (round, ark_row) in t.ark4.iter().enumerate() {
+        for (s, c) in state.iter_mut().zip(ark_row.iter()) {
+            *s += c;
         }
         if partial_range.contains(&round) {
             state[0] = asbox17(state[0]);
@@ -475,40 +510,39 @@ fn poseidon4_perm_soft(state: &mut [AFq; 5]) {
         }
         let mut new_state = [AFq::zero(); 5];
         for (i, ns) in new_state.iter_mut().enumerate() {
-            for (m, s) in vendored4::POSEIDON4_MDS[i].iter().zip(state.iter()) {
-                *ns += afq_from_limbs(m) * s;
+            for (m, s) in t.mds4[i].iter().zip(state.iter()) {
+                *ns += *m * s;
             }
         }
         *state = new_state;
     }
 }
 
-fn poseidon4_hash_soft(inputs: &[AFq]) -> AFq {
+fn poseidon4_hash_soft(inputs: &[AFq], t: &SoftTables) -> AFq {
     let mut state = [AFq::zero(); 5];
-    state[1] += afq_from_limbs(&vendored4::POSEIDON4_DOMAIN);
+    state[1] += t.domain4;
     state[2] += AFq::from(inputs.len() as u64);
     let mut chunks = inputs.chunks(4).peekable();
     if chunks.peek().is_some() {
-        poseidon4_perm_soft(&mut state);
+        poseidon4_perm_soft(&mut state, t);
         while let Some(chunk) = chunks.next() {
             for (i, v) in chunk.iter().enumerate() {
                 state[1 + i] += v;
             }
             if chunks.peek().is_some() {
-                poseidon4_perm_soft(&mut state);
+                poseidon4_perm_soft(&mut state, t);
             }
         }
     }
-    poseidon4_perm_soft(&mut state);
+    poseidon4_perm_soft(&mut state, t);
     state[1]
 }
 
 fn afr_full(s: &mut u64) -> ark_ed_on_bls12_377::Fr {
-    let mut bytes = [0u8; 32];
-    for chunk in bytes.chunks_mut(8) {
-        chunk.copy_from_slice(&xorshift(s).to_le_bytes());
-    }
-    ark_ed_on_bls12_377::Fr::from_le_bytes_mod_order(&bytes)
+    // Value-identical to the accelerated path's full_scalar (same masked
+    // limbs, < 2^250 < r, no mod-order reduction) so the soft twin
+    // computes the SAME result and the usdcx KAT in main.rs holds.
+    ark_ed_on_bls12_377::Fr::from_bigint(BigInt::new(full_scalar(s))).expect("masked scalar is < r")
 }
 
 fn afq_rand(s: &mut u64) -> AFq {
@@ -520,15 +554,15 @@ fn afq_rand(s: &mut u64) -> AFq {
     afq_from_limbs(&limbs)
 }
 
-fn merkle_verify_16_soft(leaf: AFq, s: &mut u64) -> AFq {
-    let mut node = poseidon4_hash_soft(&[leaf]);
+fn merkle_verify_16_soft(leaf: AFq, s: &mut u64, t: &SoftTables) -> AFq {
+    let mut node = poseidon4_hash_soft(&[leaf], t);
     for _ in 0..16 {
         let sibling = afq_rand(s);
         let bit = xorshift(s) & 1 == 1;
         node = if bit {
-            poseidon4_hash_soft(&[sibling, node])
+            poseidon4_hash_soft(&[sibling, node], t)
         } else {
-            poseidon4_hash_soft(&[node, sibling])
+            poseidon4_hash_soft(&[node, sibling], t)
         };
     }
     node
@@ -558,6 +592,8 @@ fn usdcx_transfer_private_bound(seed: u64, records: jolt::UntrustedAdvice<&[u8]>
 #[jolt::provable(stack_size = 262144, heap_size = 1048576, max_trace_length = 134217728)]
 fn usdcx_transfer_private_soft(seed: u64) -> u64 {
     let mut s = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+    // Montgomery-form constants built once, like real software keeps them
+    let soft_t = soft_tables();
     let g = AProj::generator();
     let pk = g * afr_full(&mut s);
     let addr_pt = g * afr_full(&mut s);
@@ -573,25 +609,25 @@ fn usdcx_transfer_private_soft(seed: u64) -> u64 {
     state[0] += shared.x;
     state[1] += shared.y;
     for _ in 0..4 {
-        poseidon_perm_soft(&mut state);
+        poseidon_perm_soft(&mut state, &soft_t);
     }
     acc += state[0];
 
     for _ in 0..2 {
-        poseidon_perm_soft(&mut state);
+        poseidon_perm_soft(&mut state, &soft_t);
     }
     let sn = (g * afr_full(&mut s)).into_affine();
     acc += sn.x + state[0];
 
-    poseidon_perm_soft(&mut state);
+    poseidon_perm_soft(&mut state, &soft_t);
     let e = afr_full(&mut s);
     let z = afr_full(&mut s);
     let rp = (g * z + pk * e).into_affine();
     acc += rp.x;
 
     start_cycle_tracking("merkle_proofs_soft");
-    let root1 = merkle_verify_16_soft(afq_rand(&mut s), &mut s);
-    let root2 = merkle_verify_16_soft(afq_rand(&mut s), &mut s);
+    let root1 = merkle_verify_16_soft(afq_rand(&mut s), &mut s, &soft_t);
+    let root2 = merkle_verify_16_soft(afq_rand(&mut s), &mut s, &soft_t);
     acc += root1 + root2;
     end_cycle_tracking("merkle_proofs_soft");
 
@@ -602,7 +638,7 @@ fn usdcx_transfer_private_soft(seed: u64) -> u64 {
         state[0] += eph.x;
         state[1] += so.x;
         for _ in 0..n_perms {
-            poseidon_perm_soft(&mut state);
+            poseidon_perm_soft(&mut state, &soft_t);
         }
         acc += state[0] + eph.y;
     }

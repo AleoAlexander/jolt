@@ -20,39 +20,44 @@ pub const MODULUS: [u64; 4] = [
     0x12ab655e9a2ca556,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "[u64; 4]", into = "[u64; 4]")]
 pub struct Fq {
     pub(crate) e: [u64; 4],
 }
 
-// Canonicity is validated at every IN-TREE construction site (this
-// Deserialize, from_canonical, from_canonical_const), so no value built
-// through them can be non-canonical — closing the per-method policy
-// family (div/inverse spoils, silent add/sub corruption, host-vs-guest
-// reduction divergence) at construction. `e` is pub(crate), so sibling
-// modules could still build a literal; div's runtime guard remains the
-// load-bearing backstop on the inverse()/div path.
-impl<'de> Deserialize<'de> for Fq {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let e = <[u64; 4]>::deserialize(deserializer)?;
+impl TryFrom<[u64; 4]> for Fq {
+    type Error = &'static str;
+    fn try_from(e: [u64; 4]) -> Result<Self, Self::Error> {
         if is_fq_non_canonical(&e) {
-            return Err(serde::de::Error::custom("non-canonical Fq limbs"));
+            return Err("non-canonical Fq limbs");
         }
         Ok(Fq { e })
     }
 }
 
-/// `true` iff `x >= q` (non-canonical). Const so build-time and runtime
-/// validation share ONE spelling of the predicate.
+impl From<Fq> for [u64; 4] {
+    fn from(v: Fq) -> Self {
+        v.e
+    }
+}
+
+// Canonicity is validated at every IN-TREE construction site (serde via
+// the try_from derive above, from_canonical, from_canonical_const), so no
+// value built through them can be non-canonical — closing the per-method
+// policy family (div/inverse spoils, silent add/sub corruption,
+// host-vs-guest reduction divergence) at construction. `e` is pub(crate),
+// so sibling modules could still build a literal; div's runtime guard
+// remains the load-bearing backstop on the inverse()/div path.
+
+/// `true` iff `x >= q` (non-canonical). Runtime spelling: sits in the
+/// guest's hottest path (`add` checks it every call), and this exact
+/// for-loop form measurably beats const-compatible rewrites by ~0.8M
+/// cycles on the usdcx trace; `canonicity_predicates_agree` pins it to
+/// the const spelling below.
 #[inline(always)]
-const fn is_fq_non_canonical(x: &[u64; 4]) -> bool {
-    let mut i = 4usize;
-    while i > 0 {
-        i -= 1;
+fn is_fq_non_canonical(x: &[u64; 4]) -> bool {
+    for i in (0..4).rev() {
         if x[i] < MODULUS[i] {
             return false;
         }
@@ -61,6 +66,28 @@ const fn is_fq_non_canonical(x: &[u64; 4]) -> bool {
         }
     }
     true // x == q
+}
+
+/// Test probe: evaluates both predicate spellings on the same input.
+#[cfg(test)]
+pub(crate) fn predicates_agree_probe(x: &[u64; 4]) -> (bool, bool) {
+    (is_fq_non_canonical(x), is_fq_non_canonical_const(x))
+}
+
+/// Const spelling of the same predicate, for build-time validation
+/// (`from_canonical_const`, table conversion). Must agree with
+/// [`is_fq_non_canonical`] on every input — test-enforced.
+const fn is_fq_non_canonical_const(x: &[u64; 4]) -> bool {
+    if x[3] != MODULUS[3] {
+        return x[3] > MODULUS[3];
+    }
+    if x[2] != MODULUS[2] {
+        return x[2] > MODULUS[2];
+    }
+    if x[1] != MODULUS[1] {
+        return x[1] > MODULUS[1];
+    }
+    x[0] >= MODULUS[0]
 }
 
 /// Limb add with carry chain; returns (sum, carry).
@@ -116,7 +143,7 @@ impl Fq {
     /// spoiling; runtime-limb callers must use [`Fq::from_canonical`],
     /// whose spoil keeps the fail-closed posture.
     pub const fn from_canonical_const(e: [u64; 4]) -> Self {
-        if is_fq_non_canonical(&e) {
+        if is_fq_non_canonical_const(&e) {
             panic!("non-canonical Fq constant");
         }
         Fq { e }

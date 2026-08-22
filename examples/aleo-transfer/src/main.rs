@@ -155,6 +155,16 @@ pub fn main() {
         "usdcx_transfer_private_soft trace: {} cycles",
         soft.trace_len()
     );
+    // The soft twin must compute the identical result — this is the KAT
+    // that keeps baseline rewrites (e.g. constant-table hoisting) honest.
+    let accel_out: u64 =
+        jolt_sdk::postcard::from_bytes(&usdcx_summary.io_device.outputs).expect("accel output");
+    let soft_out: u64 =
+        jolt_sdk::postcard::from_bytes(&soft.io_device.outputs).expect("soft output");
+    assert_eq!(
+        accel_out, soft_out,
+        "usdcx soft twin diverged from the accelerated path"
+    );
 
     // B2: usdcx with active welds — the honest bound-guest cycle count.
     {
