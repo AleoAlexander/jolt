@@ -20,9 +20,26 @@ pub const MODULUS: [u64; 4] = [
     0x12ab655e9a2ca556,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Fq {
     pub(crate) e: [u64; 4],
+}
+
+// Type-level canonicity: every constructor validates, so no code past
+// construction can observe a non-canonical Fq. This closes the whole
+// family of per-method policies (div/inverse spoils, silent add/sub
+// corruption, host-vs-guest reduction divergence) at one choke point.
+impl<'de> Deserialize<'de> for Fq {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let e = <[u64; 4]>::deserialize(deserializer)?;
+        if is_fq_non_canonical(&e) {
+            return Err(serde::de::Error::custom("non-canonical Fq limbs"));
+        }
+        Ok(Fq { e })
+    }
 }
 
 /// `true` iff `x >= q` (non-canonical).
@@ -71,9 +88,14 @@ impl Fq {
     pub const ZERO: Fq = Fq { e: [0; 4] };
     pub const ONE: Fq = Fq { e: [1, 0, 0, 0] };
 
-    /// Canonical little-endian limbs. Panics on non-canonical input in debug.
+    /// Canonical little-endian limbs. A non-canonical input spoils the
+    /// proof (guest) / panics (host): with validating construction here
+    /// and in Deserialize, the canonicity invariant holds everywhere
+    /// downstream — add/sub/mul/square correctness all assume it.
     pub fn from_canonical(e: [u64; 4]) -> Self {
-        debug_assert!(!is_fq_non_canonical(&e), "non-canonical Fq input");
+        if is_fq_non_canonical(&e) {
+            jolt_inlines_sdk::spoil_proof();
+        }
         Fq { e }
     }
 
@@ -251,15 +273,12 @@ impl Fq {
 
 impl Fq {
     pub fn inverse(&self) -> Option<Fq> {
-        // Policy (deliberate): None answers invertibility for CANONICAL
-        // values only; a non-canonical input is a violated type invariant
-        // and fails CLOSED via spoil, never a provable None/zero branch.
-        // (A nonzero non-canonical value is mathematically invertible, so
-        // answering None for it would prove the wrong branch; from_canonical
-        // is debug-only, so release builds can construct such values.)
-        if is_fq_non_canonical(&self.e) {
-            jolt_inlines_sdk::spoil_proof();
-        }
+        // Zero semantics differ deliberately from div: inverse() answers
+        // invertibility (zero -> provable None branch), while a.div(&zero)
+        // spoils — callers who must fail closed on zero use div directly.
+        // Canonicity is a construction-time invariant (from_canonical /
+        // Deserialize validate), so no per-call check is needed here;
+        // div's guard remains as defense in depth.
         if self.is_zero() {
             None
         } else {

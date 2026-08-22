@@ -124,27 +124,23 @@ confirmed the B2 cryptography sound and its findings were fixed at
 
 ## Known implementation gaps (round-2 code review, July 2026)
 Distinct from the protocol-design requirements above — these are code-level:
-- **from_canonical uses debug_assert** (sdk.rs): compiled out in release, so
-  non-canonical operands are accepted at the input boundary. Load-bearing
-  because Fq derives Eq on raw limbs and add()/the overflow argument assume
-  < q. Real (small) soundness crack in release; fix = reduce or spoil_proof
-  instead of debug_assert. Present at phase0-complete and HEAD. B2
-  manifestation (review 4): the host advice path reduces non-canonical
-  limbs via arkworks before logging while the weld compares raw guest
-  limbs, so a guest holding a serde-constructed non-canonical Fq spoils an
-  otherwise honest run — mul/square have no input guard (div now does).
-  Unreachable through in-tree constructors; the real fix is the type-level
-  canonicity enforcement above.
+- **from_canonical uses debug_assert** — FIXED (2026-08-22): the
+  constructor now spoils (guest) / panics (host) on non-canonical limbs
+  and Fq's Deserialize validates, making canonicity a type invariant.
+  (History: the debug-only check let release builds construct e >= q,
+  with per-method divergent behavior — see the add() entry.)
 - **load_fq ...unwrap_or(0)** — FIXED by the 2026-08-17 rebase: upstream's
   InlineAdviceContext API returns Result, so a failed memory load now surfaces
   as InlineAdviceError instead of silently becoming limb 0. (Was: latent
   desync once B1 binds the log to the trace.)
 - **add() debug_assert!(!carry)** (sdk.rs): drops carry-out in release;
-  reachable only via non-canonical inputs (same root as from_canonical).
-  Note the family now has FOUR distinct non-canonical-input behaviors —
-  div/inverse spoil, mul/square check output only, add silently corrupts —
-  all rooted in the same debug-only from_canonical; the type-level fix
-  (validating constructor + Deserialize) covers them all at once.
+  reachable only via non-canonical inputs. RESOLVED at the root
+  (2026-08-22): from_canonical now spoils/panics on non-canonical limbs
+  and Deserialize validates, so no code past construction can observe a
+  non-canonical Fq — the per-method divergence family (div/inverse
+  spoils, silent add/sub corruption, host-vs-guest reduction) is closed
+  at one choke point. Raw-.insn guests bypassing the SDK remain outside
+  this invariant (see sequence_builder.rs's DIVQ comment).
 - **FIELD_OP_LOG thread-local**: correct single-pass for the published
   RESULTS.md counts (verified: usdcx/credits = 3.19× matches the 3.2× op
   ratio; no double-count), but drain-ordering is fragile and a future

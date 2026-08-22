@@ -183,9 +183,13 @@ edbls_advice_op!(EdBlsDivQ, funct3: crate::EDBLS_DIVQ_FUNCT3, name: crate::EDBLS
     compute: |a, b| {
         a * b
             .inverse()
-            // SDK guests guard divisors (zero or non-canonical spoils before
-            // the inline); a raw-.insn guest bypassing the SDK reaches this
-            // host panic instead — host-honest posture, see PROTOTYPE.md.
-            .expect("zero divisor reached DIVQ advice: raw-insn guest bypassed the SDK guard")
+            // SDK guests spoil on bad divisors before the inline. A raw-.insn
+            // guest bypassing the SDK gets host-honest posture instead:
+            // divisor limbs that reduce to zero mod q (0 or k*q) panic here,
+            // and NON-multiples >= q are silently reduced by load_fq's
+            // arkworks constructor before logging (same for MulQ/SquareQ) —
+            // the record then carries reduced limbs while guest memory holds
+            // raw ones, and the weld catches the mismatch in bound guests.
+            .expect("divisor reduces to zero in edwards-bls12 base field")
     },
     normalize: |a, b, c| (c, b, a));
