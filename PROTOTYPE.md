@@ -112,8 +112,11 @@ confirmed the B2 cryptography sound and its findings were fixed at
 5. **Feature-split baselines.** field-accel-bind compiles a ~4 cyc/op
    no-op weld check into unbound guests (see Measurement note above).
    A clean fix needs per-provable-fn feature control the #[jolt::provable]
-   macro doesn't offer; the RFC's headline baselines use feature-off
-   builds instead.
+   macro doesn't offer. Since the fair-baseline correction, the RFC's
+   headline row is measured feature-ON in one binary (the authoritative
+   13.95M unbound number carries the ~4 cyc/op tax and is reported as
+   such); this item now covers only the residual tax, not the baseline
+   methodology.
 
 ## Historical inventory (pre-B2, resolved as described above)
 1. Advice results are unbound in the main proof (B0 ops verify nothing
