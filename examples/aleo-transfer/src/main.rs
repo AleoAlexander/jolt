@@ -1,5 +1,6 @@
 #[expect(
     clippy::expect_used,
+    clippy::unwrap_used,
     reason = "benchmark harness; failures should abort loudly"
 )]
 pub fn main() {
