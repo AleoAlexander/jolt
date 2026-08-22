@@ -20,15 +20,30 @@ pub const MODULUS: [u64; 4] = [
     0x12ab655e9a2ca556,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fq {
     pub(crate) e: [u64; 4],
 }
 
-// Type-level canonicity: every constructor validates, so no code past
-// construction can observe a non-canonical Fq. This closes the whole
-// family of per-method policies (div/inverse spoils, silent add/sub
-// corruption, host-vs-guest reduction divergence) at one choke point.
+// Matched manual serde pair: both sides use the bare [u64; 4] encoding so
+// roundtrips work in every format (a derived struct-form Serialize against
+// the tuple-form Deserialize breaks self-describing formats like JSON).
+impl Serialize for Fq {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.e.serialize(serializer)
+    }
+}
+
+// Canonicity is validated at every IN-TREE construction site (this
+// Deserialize, from_canonical, from_canonical_const), so no value built
+// through them can be non-canonical — closing the per-method policy
+// family (div/inverse spoils, silent add/sub corruption, host-vs-guest
+// reduction divergence) at construction. `e` is pub(crate), so sibling
+// modules could still build a literal; div's runtime guard remains the
+// load-bearing backstop on the inverse()/div path.
 impl<'de> Deserialize<'de> for Fq {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -92,9 +107,36 @@ impl Fq {
     /// proof (guest) / panics (host): with validating construction here
     /// and in Deserialize, the canonicity invariant holds everywhere
     /// downstream — add/sub/mul/square correctness all assume it.
+    /// For constants, prefer [`Fq::from_canonical_const`], which moves
+    /// this check to build time.
     pub fn from_canonical(e: [u64; 4]) -> Self {
         if is_fq_non_canonical(&e) {
             jolt_inlines_sdk::spoil_proof();
+        }
+        Fq { e }
+    }
+
+    /// Const-context constructor: non-canonical limbs FAIL THE BUILD via
+    /// const-eval panic, so table constants converted through this pay no
+    /// runtime canonicity check in guest hot loops.
+    pub const fn from_canonical_const(e: [u64; 4]) -> Self {
+        let mut j = 4usize;
+        let mut non_canonical = true; // e == q counts as non-canonical
+        let mut decided = false;
+        while j > 0 {
+            j -= 1;
+            if !decided {
+                if e[j] < MODULUS[j] {
+                    non_canonical = false;
+                    decided = true;
+                } else if e[j] > MODULUS[j] {
+                    non_canonical = true;
+                    decided = true;
+                }
+            }
+        }
+        if non_canonical {
+            panic!("non-canonical Fq constant");
         }
         Fq { e }
     }
@@ -276,9 +318,9 @@ impl Fq {
         // Zero semantics differ deliberately from div: inverse() answers
         // invertibility (zero -> provable None branch), while a.div(&zero)
         // spoils — callers who must fail closed on zero use div directly.
-        // Canonicity is a construction-time invariant (from_canonical /
-        // Deserialize validate), so no per-call check is needed here;
-        // div's guard remains as defense in depth.
+        // Canonicity: validated at in-tree construction; on this path
+        // div's canonicity leg is the LOAD-BEARING runtime backstop (a
+        // non-canonical nonzero self would fall through is_zero into div).
         if self.is_zero() {
             None
         } else {

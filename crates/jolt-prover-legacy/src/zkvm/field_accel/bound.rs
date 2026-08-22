@@ -267,6 +267,18 @@ where
     (poly, commitment, hint)
 }
 
+/// The sidecar protocol is non-ZK: under the zk feature Dory's proof mode
+/// ignores claimed evaluations and commitments carry fresh random blinds,
+/// so proving, verifying, or recomputing commitments would be unsound or
+/// vacuous. One spelling, called by every public entry point. (cfg! keeps
+/// all bodies compiling in every lane without unreachable-code warnings.)
+fn reject_under_zk() -> Result<(), &'static str> {
+    if cfg!(feature = "zk") {
+        return Err("field-accel sidecar is non-ZK; rejected under the zk feature");
+    }
+    Ok(())
+}
+
 /// Aux polynomial length for a given row count — shared by prover and
 /// verifier so their Dory context dimensions cannot drift.
 fn aux_len(log_rows: usize) -> usize {
@@ -294,6 +306,7 @@ where
     F: JoltField,
     PCS: CommitmentScheme<Field = F>,
 {
+    reject_under_zk()?;
     let words = region_words(advice_bytes, max_untrusted_advice_size)?;
     let (_poly, commitment, hint) = commit_region_poly::<F, PCS>(words, setup);
     Ok((commitment, hint))
@@ -346,14 +359,13 @@ where
     PCS: CommitmentScheme<Field = F>,
     T: Transcript,
 {
-    // The sidecar protocol is non-ZK: under the zk feature Dory's proof
-    // mode ignores claimed evaluations, so accepting proofs here would be
-    // unsound. Reject explicitly (cfg! keeps the rest of the body
-    // compiling in every lane without unreachable-code warnings).
-    if cfg!(feature = "zk") {
-        return Err("field-accel sidecar is non-ZK; rejected under the zk feature");
-    }
+    reject_under_zk()?;
     let words = region_words(advice_bytes, max_untrusted_advice_size)?;
+    debug_assert_eq!(
+        words.len(),
+        region_word_count(max_untrusted_advice_size)?,
+        "prover data-derived and verifier parameter-derived region widths must agree"
+    );
     let advice_vars = words.len().trailing_zeros() as usize;
 
     let (_n, rows) = parse_region_rows(&words)?;
@@ -480,13 +492,7 @@ where
         PartialEq,
     T: Transcript,
 {
-    // The sidecar protocol is non-ZK: under the zk feature Dory's proof
-    // mode ignores claimed evaluations, so accepting proofs here would be
-    // unsound. Reject explicitly (cfg! keeps the rest of the body
-    // compiling in every lane without unreachable-code warnings).
-    if cfg!(feature = "zk") {
-        return Err("field-accel sidecar is non-ZK; rejected under the zk feature");
-    }
+    reject_under_zk()?;
     let Some(main_commitment) = main_untrusted_advice_commitment else {
         return Err("main proof carries no untrusted-advice commitment");
     };
@@ -532,13 +538,7 @@ where
     PCS: CommitmentScheme<Field = F>,
     T: Transcript,
 {
-    // The sidecar protocol is non-ZK: under the zk feature Dory's proof
-    // mode ignores claimed evaluations, so accepting proofs here would be
-    // unsound. Reject explicitly (cfg! keeps the rest of the body
-    // compiling in every lane without unreachable-code warnings).
-    if cfg!(feature = "zk") {
-        return Err("field-accel sidecar is non-ZK; rejected under the zk feature");
-    }
+    reject_under_zk()?;
     let region_word_count = region_word_count(max_untrusted_advice_size)?;
     let advice_vars = region_word_count.trailing_zeros() as usize;
 
@@ -944,7 +944,6 @@ mod roundtrip_tests {
         )
         .unwrap();
 
-        // matching main-proof commitment -> Ok
         let main_vc = DoryCommitmentScheme::commitment_into_verifier(advice_commitment);
         let mut vt = Blake2bTranscript::new(b"fa_bridged_test");
         verify_field_accel_bound_bridged::<Fr, DoryCommitmentScheme, _>(
@@ -958,7 +957,6 @@ mod roundtrip_tests {
         )
         .unwrap();
 
-        // absent main commitment -> Err
         let mut vt = Blake2bTranscript::new(b"fa_bridged_test");
         assert!(
             verify_field_accel_bound_bridged::<Fr, DoryCommitmentScheme, _>(
@@ -973,14 +971,9 @@ mod roundtrip_tests {
             .is_err()
         );
 
-        // mismatched main commitment -> Err before any opening runs
-        let mut other_bytes = advice_bytes.clone();
-        let flip = other_bytes.len() - 3;
-        other_bytes[flip] ^= 1;
-        let (other_commitment, _) =
-            commit_advice_region::<Fr, DoryCommitmentScheme>(&other_bytes, MAX_ADVICE, &setup)
-                .unwrap();
-        let other_vc = DoryCommitmentScheme::commitment_into_verifier(other_commitment);
+        // an already-distinct commitment (the aux commitment) serves as the
+        // mismatched main-proof value — no second region commit needed
+        let other_vc = DoryCommitmentScheme::commitment_into_verifier(proof.aux_commitment);
         let mut vt = Blake2bTranscript::new(b"fa_bridged_test");
         assert!(
             verify_field_accel_bound_bridged::<Fr, DoryCommitmentScheme, _>(

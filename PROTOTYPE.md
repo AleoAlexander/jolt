@@ -16,9 +16,11 @@ re-run green and numbers re-measured (see RESULTS.md `rebase-20260817`).
   64-bit-word identity with committed offset carries + 2-bit digit range
   checks, Dory-bound evaluations, and a header-anchored record count
   (bound.rs). Measured: fqmul 87 cyc/op bound (vs 45 unbound / 252
-  software); usdcx 20.23M cycles bound vs 84.26M software (4.2x; 5.8x
-  unbound); bound gadget proves the 46,056-op log in ~9.6s, verifies in
-  ~0.15s; mult_bench bound end-to-end (welds + sidecar + commitment
+  software); usdcx 19.50M cycles bound vs 84.26M software (4.3x; 5.8x
+  unbound — bound improved 2026-08-22 when Poseidon table constants
+  became build-time-validated Fq, removing runtime canonicity checks the
+  July code had always paid); bound gadget proves the 46,056-op log in
+  ~9.5s, verifies in ~0.15s; mult_bench bound end-to-end (welds + sidecar + commitment
   equality) passes. Composition is a sidecar sharing the main proof's
   advice commitment object — in-pipeline integration is upstream's call
   (RFC question 2).
@@ -140,7 +142,10 @@ Distinct from the protocol-design requirements above — these are code-level:
   non-canonical Fq — the per-method divergence family (div/inverse
   spoils, silent add/sub corruption, host-vs-guest reduction) is closed
   at one choke point. Raw-.insn guests bypassing the SDK remain outside
-  this invariant (see sequence_builder.rs's DIVQ comment).
+  this invariant AND outside the weld (they never call bind::init, so
+  weld/finalize are no-ops): the raw-insn surface is unprotected by B2
+  by construction; closing it means load_fq rejecting non-canonical
+  limbs for all three ops (see sequence_builder.rs's DIVQ comment).
 - **FIELD_OP_LOG thread-local**: correct single-pass for the published
   RESULTS.md counts (verified: usdcx/credits = 3.19× matches the 3.2× op
   ratio; no double-count), but drain-ordering is fragile and a future

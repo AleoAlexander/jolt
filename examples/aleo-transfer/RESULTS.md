@@ -228,3 +228,44 @@ mult_bench BOUND gate PASSED: welds + gadget sidecar (2.141s) + commitment equal
 7975059456  maximum resident set size
 ```
 
+## b2-review-loop-20260822 — 2026-08-22 — bbe92ce6f
+```
+"record_decrypt": 511531 RV64IMAC cycles + 44588 virtual instructions = 556119 total cycles
+"serial_number": 395226 RV64IMAC cycles + 35468 virtual instructions = 430694 total cycles
+"schnorr_verify": 576753 RV64IMAC cycles + 54180 virtual instructions = 630933 total cycles
+"output_record_1": 914946 RV64IMAC cycles + 80808 virtual instructions = 995754 total cycles
+"output_record_2": 914417 RV64IMAC cycles + 80980 virtual instructions = 995397 total cycles
+"transfer_total": 3312903 RV64IMAC cycles + 296024 virtual instructions = 3608927 total cycles
+"record_decrypt": 513628 RV64IMAC cycles + 44988 virtual instructions = 558616 total cycles
+"serial_number": 389448 RV64IMAC cycles + 34964 virtual instructions = 424412 total cycles
+"schnorr_verify": 597142 RV64IMAC cycles + 55668 virtual instructions = 652810 total cycles
+"merkle_proofs": 9263201 RV64IMAC cycles + 723520 virtual instructions = 9986721 total cycles
+"output_token_1": 885805 RV64IMAC cycles + 78216 virtual instructions = 964021 total cycles
+"output_token_2": 900599 RV64IMAC cycles + 79544 virtual instructions = 980143 total cycles
+"output_compliance": 973243 RV64IMAC cycles + 85544 virtual instructions = 1058787 total cycles
+"usdcx_total": 13523168 RV64IMAC cycles + 1102444 virtual instructions = 14625612 total cycles
+bound sidecar setup: 1.5s
+field-accel BOUND gadget (transfer scale): 46056 records, prove 9.485s, verify 0.1518s
+"merkle_proofs_soft": 60425261 RV64IMAC cycles + 1116220 virtual instructions = 61541481 total cycles
+"usdcx_soft_total": 82837104 RV64IMAC cycles + 1418296 virtual instructions = 84255400 total cycles
+"record_decrypt": 717122 RV64IMAC cycles + 44988 virtual instructions = 762110 total cycles
+"serial_number": 553916 RV64IMAC cycles + 34964 virtual instructions = 588880 total cycles
+"schnorr_verify": 871818 RV64IMAC cycles + 55668 virtual instructions = 927486 total cycles
+"merkle_proofs": 12379777 RV64IMAC cycles + 723520 virtual instructions = 13103297 total cycles
+"output_token_1": 1244637 RV64IMAC cycles + 78216 virtual instructions = 1322853 total cycles
+"output_token_2": 1266467 RV64IMAC cycles + 79544 virtual instructions = 1346011 total cycles
+"output_compliance": 1363771 RV64IMAC cycles + 85544 virtual instructions = 1449315 total cycles
+"usdcx_total": 18397610 RV64IMAC cycles + 1102444 virtual instructions = 19500054 total cycles
+usdcx_transfer_private_bound trace: 20755596 cycles (146766 welded records, +5255901 cycles vs unbound)
+total trace length (cycles): 4483257
+trace length (cycles): 354316
+2026-08-22T20:33:58.213004Z  INFO jolt_prover_legacy::zkvm::prover: 324036 raw RISC-V instructions + 30280 virtual instructions = 354316 total cycles
+prover time: 2.95s  (120024 cycles/s)
+proof size: 86000 bytes
+verify time: 0.066s, valid: true
+2026-08-22T20:34:04.138000Z  INFO jolt_prover_legacy::zkvm::prover: 468842 raw RISC-V instructions + 31214 virtual instructions = 500056 total cycles
+bound prover time: 3.41s (3674 welded records)
+mult_bench BOUND gate PASSED: welds + gadget sidecar (2.151s) + commitment equality
+10003218432  maximum resident set size
+```
+
