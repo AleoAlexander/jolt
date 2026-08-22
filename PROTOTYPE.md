@@ -7,7 +7,9 @@ re-run green and numbers re-measured (see RESULTS.md `rebase-20260817`).
 
 ## What this branch demonstrates
 - B0: advice-only field ops (jolt-inlines/edwards-bls12): 41 cyc/op vs 252
-  software; Aleo transfer_private model 17.59M → 3.09M cycles (5.7x).
+  software. (The July "transfer_private 17.59M → 3.09M (5.7x)" figure used
+  the withdrawn per-use-reconversion software methodology — see the
+  fair-baseline note below; the per-op number is the one that stands.)
 - B1: batched non-native-mul sumcheck (crates/jolt-prover-legacy/src/zkvm/
   field_accel/) — superseded by the B2 schema below.
 - **B2 (2026-08-18): the SOUND, fully bound gadget.** Guest welds every op
@@ -64,8 +66,10 @@ gadget — integrators use that entry point, not a hand-rolled equality.
 
 Measurement note: guests built with the `field-accel-bind` feature pay a
 ~4 cyc/op no-op weld check even when unbound (fqmul unbound reads 45
-cyc/op under the feature vs 41 clean); the RFC's unbound usdcx baseline
-(14.56M) is from a clean feature-off build.
+cyc/op under the feature vs 41 clean). The AUTHORITATIVE unbound usdcx
+number is the fair-baseline 13.95M (feature-on, same binary as the other
+columns); older 14.56M feature-off entries predate the build-time
+constant tables and are superseded.
 
 Still open, explicitly: non-ZK only (no BlindFold sync), no Akita path,
 and the SIDECAR COMPOSITION — the gadget proof shares the main proof's

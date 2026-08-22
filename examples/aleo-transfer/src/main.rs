@@ -1,3 +1,7 @@
+#[expect(
+    clippy::expect_used,
+    reason = "benchmark harness; failures should abort loudly"
+)]
 pub fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -228,6 +232,10 @@ pub fn main() {
     println!(
         "verify time: {:.3}s, valid: {is_valid}",
         t.elapsed().as_secs_f64()
+    );
+    assert!(
+        is_valid,
+        "MULT_BENCH GATE FAILED: unbound proof did not verify"
     );
 
     // B2 BOUND e2e at mult_bench scale: welds + sidecar gadget + commitment

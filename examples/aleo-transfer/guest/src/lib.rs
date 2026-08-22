@@ -403,10 +403,13 @@ fn usdcx_transfer_private_body(seed: u64) -> u64 {
     acc.to_canonical()[0]
 }
 
-// --- Software (arkworks) twins: direct measurement of the unaccelerated cost.
-// Same style as the phase0-complete baseline (ark types, fq_from_limbs
-// conversions per vendored constant) so numbers are comparable to the
-// recorded 17.59M software transfer.
+// --- Software (arkworks) twins: direct measurement of the unaccelerated
+// cost with a FAIR baseline: Montgomery-form constants are built once per
+// run (SoftTables, outside the usdcx_soft_total tracking span) the way
+// real software keeps them statically. NOT methodology-comparable to the
+// withdrawn phase0-style figures (e.g. the 17.59M July transfer), which
+// re-converted constants per use. The KAT in main.rs pins this twin to
+// the accelerated path's exact output.
 
 use ark_ec::{CurveGroup, PrimeGroup};
 use ark_ff::fields::Field as ArkField;
@@ -538,6 +541,7 @@ fn poseidon4_hash_soft(inputs: &[AFq], t: &SoftTables) -> AFq {
     state[1]
 }
 
+#[expect(clippy::expect_used, reason = "masked scalar is provably < r")]
 fn afr_full(s: &mut u64) -> ark_ed_on_bls12_377::Fr {
     // Value-identical to the accelerated path's full_scalar (same masked
     // limbs, < 2^250 < r, no mod-order reduction) so the soft twin

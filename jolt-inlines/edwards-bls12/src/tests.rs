@@ -274,9 +274,12 @@ fn serde_roundtrip_and_non_canonical_rejection() {
     // non-canonical limbs (== MODULUS) must be rejected at deserialization
     let bad = serde_json::to_string(&MODULUS).unwrap();
     assert!(serde_json::from_str::<Fq>(&bad).is_err());
-    // and via postcard (the wire format guests actually use)
+    // and via postcard (the wire format guests actually use) — both the
+    // roundtrip and the non-canonical rejection
     let bytes = jolt_postcard_roundtrip(&x);
     assert_eq!(x, bytes);
+    let bad_wire = postcard::to_stdvec(&MODULUS).unwrap();
+    assert!(postcard::from_bytes::<Fq>(&bad_wire).is_err());
 }
 
 fn jolt_postcard_roundtrip(x: &Fq) -> Fq {
@@ -289,13 +292,18 @@ fn canonicity_predicates_agree() {
     // boundary band around q plus random values: the runtime and const
     // spellings of the canonicity predicate must never disagree
     let mut cases: Vec<[u64; 4]> = vec![[0, 0, 0, 0], [1, 0, 0, 0], MODULUS, [u64::MAX; 4]];
-    for delta in 1..=4u64 {
-        let mut below = MODULUS;
-        below[0] -= delta;
-        let mut above = MODULUS;
-        above[0] += delta;
-        cases.push(below);
-        cases.push(above);
+    // above/below/equal boundary cases at EVERY limb index, so a flipped
+    // or mis-indexed comparison in either spelling cannot hide behind
+    // limb-0-only perturbations
+    for limb in 0..4usize {
+        for delta in 1..=2u64 {
+            let mut below = MODULUS;
+            below[limb] = below[limb].wrapping_sub(delta);
+            let mut above = MODULUS;
+            above[limb] = above[limb].wrapping_add(delta);
+            cases.push(below);
+            cases.push(above);
+        }
     }
     let mut s = 0xC0FFEEu64;
     for _ in 0..1000 {
