@@ -183,6 +183,9 @@ edbls_advice_op!(EdBlsDivQ, funct3: crate::EDBLS_DIVQ_FUNCT3, name: crate::EDBLS
     compute: |a, b| {
         a * b
             .inverse()
-            .expect("Attempted to divide by zero in edwards-bls12 base field")
+            // SDK guests guard divisors (zero or non-canonical spoils before
+            // the inline); a raw-.insn guest bypassing the SDK reaches this
+            // host panic instead — host-honest posture, see PROTOTYPE.md.
+            .expect("zero divisor reached DIVQ advice: raw-insn guest bypassed the SDK guard")
     },
     normalize: |a, b, c| (c, b, a));

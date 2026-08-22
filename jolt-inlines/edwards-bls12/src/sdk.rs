@@ -251,11 +251,16 @@ impl Fq {
 
 impl Fq {
     pub fn inverse(&self) -> Option<Fq> {
-        // Non-canonical values are uninvertible under this API rather than
-        // spoiling inside div: callers use inverse() precisely to test
-        // invertibility, so the Option contract must hold for every input
-        // a release build can construct (from_canonical is debug-only).
-        if self.is_zero() || is_fq_non_canonical(&self.e) {
+        // Policy (deliberate): None answers invertibility for CANONICAL
+        // values only; a non-canonical input is a violated type invariant
+        // and fails CLOSED via spoil, never a provable None/zero branch.
+        // (A nonzero non-canonical value is mathematically invertible, so
+        // answering None for it would prove the wrong branch; from_canonical
+        // is debug-only, so release builds can construct such values.)
+        if is_fq_non_canonical(&self.e) {
+            jolt_inlines_sdk::spoil_proof();
+        }
+        if self.is_zero() {
             None
         } else {
             Some(Fq::ONE.div(self))

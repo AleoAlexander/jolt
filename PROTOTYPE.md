@@ -141,6 +141,10 @@ Distinct from the protocol-design requirements above — these are code-level:
   desync once B1 binds the log to the trace.)
 - **add() debug_assert!(!carry)** (sdk.rs): drops carry-out in release;
   reachable only via non-canonical inputs (same root as from_canonical).
+  Note the family now has FOUR distinct non-canonical-input behaviors —
+  div/inverse spoil, mul/square check output only, add silently corrupts —
+  all rooted in the same debug-only from_canonical; the type-level fix
+  (validating constructor + Deserialize) covers them all at once.
 - **FIELD_OP_LOG thread-local**: correct single-pass for the published
   RESULTS.md counts (verified: usdcx/credits = 3.19× matches the 3.2× op
   ratio; no double-count), but drain-ordering is fragile and a future

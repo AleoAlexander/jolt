@@ -5,10 +5,10 @@ pub fn main() {
 
     // drain any log noise from prior compiles, then trace the transfer
     let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
-    let summary = guest::analyze_transfer_private(0xA1E0_0001_u64 as u64);
+    let summary = guest::analyze_transfer_private(0xA1E0_0001_u64);
 
     let transfer_log = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();
-    let usdcx_summary = guest::analyze_usdcx_transfer_private(0xA1E0_0003_u64 as u64);
+    let usdcx_summary = guest::analyze_usdcx_transfer_private(0xA1E0_0003_u64);
     println!(
         "usdcx_transfer_private trace: {} cycles",
         usdcx_summary.trace_len()
@@ -150,7 +150,7 @@ pub fn main() {
         );
     }
 
-    let soft = guest::analyze_usdcx_transfer_private_soft(0xA1E0_0003_u64 as u64);
+    let soft = guest::analyze_usdcx_transfer_private_soft(0xA1E0_0003_u64);
     println!(
         "usdcx_transfer_private_soft trace: {} cycles",
         soft.trace_len()
@@ -161,7 +161,7 @@ pub fn main() {
         let blob =
             jolt_inlines_edwards_bls12::sequence_builder::build_record_blob_padded(&usdcx_log);
         let bound_summary = guest::analyze_usdcx_transfer_private_bound(
-            0xA1E0_0003_u64 as u64,
+            0xA1E0_0003_u64,
             jolt_sdk::UntrustedAdvice::new(blob.as_slice()),
         );
         let _ = jolt_inlines_edwards_bls12::sequence_builder::take_field_op_log();

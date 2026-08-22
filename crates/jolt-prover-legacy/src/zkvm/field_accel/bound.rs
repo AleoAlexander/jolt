@@ -160,10 +160,13 @@ fn interpolate_corners<F: JoltField>(corners: &[F], r: &[F::Challenge], num_vars
     corners.iter().zip(table.iter()).map(|(v, e)| *v * *e).sum()
 }
 
-/// The single spelling of the region-layout invariant: the advice region
-/// must be a whole number of words and a power-of-two word count. Every
-/// prover and verifier path derives its word count through here, so the
-/// accepted languages cannot drift apart.
+/// The single spelling of the SIDECAR's region-layout invariant: a whole
+/// number of words and a power-of-two word count. Every sidecar prover and
+/// verifier path derives its word count through here, so their accepted
+/// languages cannot drift apart. (The MAIN pipeline is more permissive —
+/// it pads advice to the next power of two — so a guest whose declared
+/// size is not 8·2^k proves in the pipeline but is rejected here; all
+/// in-tree guests declare 8·2^k.)
 pub fn region_word_count(max_untrusted_advice_size: usize) -> Result<usize, &'static str> {
     if !max_untrusted_advice_size.is_multiple_of(8) {
         return Err("max_untrusted_advice_size must be a multiple of 8");
@@ -183,11 +186,11 @@ pub fn region_words(
     advice_bytes: &[u8],
     max_untrusted_advice_size: usize,
 ) -> Result<Vec<u64>, &'static str> {
-    region_word_count(max_untrusted_advice_size)?;
     if advice_bytes.len() > max_untrusted_advice_size {
         return Err("advice bytes exceed max_untrusted_advice_size");
     }
-    let mut words = vec![0u64; max_untrusted_advice_size / 8];
+    let word_count = region_word_count(max_untrusted_advice_size)?;
+    let mut words = vec![0u64; word_count];
     crate::zkvm::ram::populate_memory_states(0, advice_bytes, Some(&mut words), None);
     Ok(words)
 }
@@ -237,10 +240,33 @@ fn pcs_pool() -> &'static rayon::ThreadPool {
     })
 }
 
-/// Commit the advice-region polynomial exactly as the prover pipeline does
-/// (word packing + UntrustedAdvice Dory context). Shared by the sidecar
-/// prover and by callers recomputing the commitment for the equality check
-/// against the main proof.
+/// The ONE spelling of the region commitment recipe: build the polynomial
+/// from the packed words and commit it under the UntrustedAdvice Dory
+/// context (pooled MSM). Returns the polynomial too, for callers that go
+/// on to open it.
+fn commit_region_poly<F, PCS>(
+    words: Vec<u64>,
+    setup: &PCS::ProverSetup,
+) -> (
+    MultilinearPolynomial<F>,
+    PCS::Commitment,
+    PCS::OpeningProofHint,
+)
+where
+    F: JoltField,
+    PCS: CommitmentScheme<Field = F>,
+{
+    let word_count = words.len();
+    let poly = MultilinearPolynomial::from(words);
+    let _guard = DoryGlobals::initialize_context(1, word_count, DoryContext::UntrustedAdvice, None);
+    let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
+    let (commitment, hint) = pcs_pool().install(|| PCS::commit(&poly, setup));
+    (poly, commitment, hint)
+}
+
+/// Commit the advice-region polynomial exactly as the sidecar prover does
+/// (same [`commit_region_poly`] body), for callers that need only the
+/// commitment.
 pub fn commit_advice_region<F, PCS>(
     advice_bytes: &[u8],
     max_untrusted_advice_size: usize,
@@ -251,15 +277,8 @@ where
     PCS: CommitmentScheme<Field = F>,
 {
     let words = region_words(advice_bytes, max_untrusted_advice_size)?;
-    let poly = MultilinearPolynomial::from(words);
-    let _guard = DoryGlobals::initialize_context(
-        1,
-        max_untrusted_advice_size / 8,
-        DoryContext::UntrustedAdvice,
-        None,
-    );
-    let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
-    Ok(pcs_pool().install(|| PCS::commit(&poly, setup)))
+    let (_poly, commitment, hint) = commit_region_poly::<F, PCS>(words, setup);
+    Ok((commitment, hint))
 }
 
 fn aux_vector<F: JoltField>(witness: &FieldAccelWitness) -> Vec<F> {
@@ -323,20 +342,12 @@ where
 
     // Commit (advice re-commit for the hint; aux fresh), then absorb both
     // BEFORE any challenge. Capture the header word before the region
-    // vector moves into the polynomial (no 32 MB clone).
+    // vector moves into the polynomial (no 32 MB clone). The commitment
+    // goes through the SAME commit_region_poly body commit_advice_region
+    // uses — one recipe, no drift.
     let header_word = words[0];
     let region_word_count = words.len();
-    let advice_poly = MultilinearPolynomial::from(words);
-    let (advice_commitment, advice_hint) = {
-        let _guard = DoryGlobals::initialize_context(
-            1,
-            region_word_count,
-            DoryContext::UntrustedAdvice,
-            None,
-        );
-        let _ctx = DoryGlobals::with_context(DoryContext::UntrustedAdvice);
-        pcs_pool().install(|| PCS::commit(&advice_poly, setup))
-    };
+    let (advice_poly, advice_commitment, advice_hint) = commit_region_poly::<F, PCS>(words, setup);
     let aux = aux_vector::<F>(&witness);
     let aux_poly = MultilinearPolynomial::from(aux);
     let (aux_commitment, aux_hint) = {
@@ -662,7 +673,12 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// The sidecar protocol is non-ZK: under the `zk` feature every Dory
+// commitment carries a fresh random blind, so prove/verify roundtrips and
+// determinism checks cannot hold (the bridge fails closed by design).
+// These tests exercise the protocol in its supported mode; the module
+// itself compiles in both modes so workspace lanes stay green.
+#[cfg(all(test, not(feature = "zk")))]
 #[expect(clippy::unwrap_used)]
 mod roundtrip_tests {
     use super::super::{limbs_to_biguint, FieldOpRecord};
