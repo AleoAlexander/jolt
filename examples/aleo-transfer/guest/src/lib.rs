@@ -31,39 +31,20 @@ fn sbox17(x: Fq) -> Fq {
     x.square().square().square().square().mul(&x)
 }
 
-// Poseidon constants as Fq, canonicity-validated at BUILD time via
-// from_canonical_const — the hot loops pay zero runtime checks.
-static POSEIDON2_ARK_FQ: [[Fq; 3]; 39] = {
-    let mut out = [[Fq::ZERO; 3]; 39];
-    let mut r = 0;
-    while r < 39 {
-        let mut i = 0;
-        while i < 3 {
-            out[r][i] = Fq::from_canonical_const(vendored::POSEIDON2_ARK[r][i]);
-            i += 1;
-        }
-        r += 1;
-    }
-    out
-};
-static POSEIDON2_MDS_FQ: [[Fq; 3]; 3] = {
-    let mut out = [[Fq::ZERO; 3]; 3];
-    let mut r = 0;
-    while r < 3 {
-        let mut i = 0;
-        while i < 3 {
-            out[r][i] = Fq::from_canonical_const(vendored::POSEIDON2_MDS[r][i]);
-            i += 1;
-        }
-        r += 1;
-    }
-    out
-};
+// Poseidon constants as Fq, canonicity-validated at BUILD time via the
+// SDK's const table converter — the hot loops pay zero runtime checks and
+// every bound is inferred from the vendored table types.
+const POSEIDON2_ROUNDS: usize =
+    vendored::POSEIDON2_FULL_ROUNDS + vendored::POSEIDON2_PARTIAL_ROUNDS;
+static POSEIDON2_ARK_FQ: [[Fq; 3]; POSEIDON2_ROUNDS] =
+    Fq::table_from_canonical_const(&vendored::POSEIDON2_ARK);
+static POSEIDON2_MDS_FQ: [[Fq; 3]; 3] = Fq::table_from_canonical_const(&vendored::POSEIDON2_MDS);
 static POSEIDON2_DOMAIN_FQ: Fq = Fq::from_canonical_const(vendored::POSEIDON2_DOMAIN);
 
 fn mds_row(row: &[Fq; 3], state: &[Fq; 3]) -> Fq {
-    let mut acc = Fq::ZERO;
-    for (m, s) in row.iter().zip(state.iter()) {
+    // seed with the first product: one fewer software add per row
+    let mut acc = row[0].mul(&state[0]);
+    for (m, s) in row.iter().zip(state.iter()).skip(1) {
         acc = acc.add(&m.mul(s));
     }
     acc
@@ -270,37 +251,15 @@ fn sbox17_5(x: Fq) -> Fq {
 
 const POSEIDON4_ROUNDS: usize =
     vendored4::POSEIDON4_FULL_ROUNDS + vendored4::POSEIDON4_PARTIAL_ROUNDS;
-static POSEIDON4_ARK_FQ: [[Fq; 5]; POSEIDON4_ROUNDS] = {
-    let mut out = [[Fq::ZERO; 5]; POSEIDON4_ROUNDS];
-    let mut r = 0;
-    while r < POSEIDON4_ROUNDS {
-        let mut i = 0;
-        while i < 5 {
-            out[r][i] = Fq::from_canonical_const(vendored4::POSEIDON4_ARK[r][i]);
-            i += 1;
-        }
-        r += 1;
-    }
-    out
-};
-static POSEIDON4_MDS_FQ: [[Fq; 5]; 5] = {
-    let mut out = [[Fq::ZERO; 5]; 5];
-    let mut r = 0;
-    while r < 5 {
-        let mut i = 0;
-        while i < 5 {
-            out[r][i] = Fq::from_canonical_const(vendored4::POSEIDON4_MDS[r][i]);
-            i += 1;
-        }
-        r += 1;
-    }
-    out
-};
+static POSEIDON4_ARK_FQ: [[Fq; 5]; POSEIDON4_ROUNDS] =
+    Fq::table_from_canonical_const(&vendored4::POSEIDON4_ARK);
+static POSEIDON4_MDS_FQ: [[Fq; 5]; 5] = Fq::table_from_canonical_const(&vendored4::POSEIDON4_MDS);
 static POSEIDON4_DOMAIN_FQ: Fq = Fq::from_canonical_const(vendored4::POSEIDON4_DOMAIN);
 
 fn mds_row5(row: &[Fq; 5], state: &[Fq; 5]) -> Fq {
-    let mut acc = Fq::ZERO;
-    for (m, s) in row.iter().zip(state.iter()) {
+    // seed with the first product: one fewer software add per row
+    let mut acc = row[0].mul(&state[0]);
+    for (m, s) in row.iter().zip(state.iter()).skip(1) {
         acc = acc.add(&m.mul(s));
     }
     acc

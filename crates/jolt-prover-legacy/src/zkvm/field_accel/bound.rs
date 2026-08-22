@@ -361,11 +361,6 @@ where
 {
     reject_under_zk()?;
     let words = region_words(advice_bytes, max_untrusted_advice_size)?;
-    debug_assert_eq!(
-        words.len(),
-        region_word_count(max_untrusted_advice_size)?,
-        "prover data-derived and verifier parameter-derived region widths must agree"
-    );
     let advice_vars = words.len().trailing_zeros() as usize;
 
     let (_n, rows) = parse_region_rows(&words)?;

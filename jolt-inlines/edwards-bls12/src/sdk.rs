@@ -20,21 +20,10 @@ pub const MODULUS: [u64; 4] = [
     0x12ab655e9a2ca556,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
 pub struct Fq {
     pub(crate) e: [u64; 4],
-}
-
-// Matched manual serde pair: both sides use the bare [u64; 4] encoding so
-// roundtrips work in every format (a derived struct-form Serialize against
-// the tuple-form Deserialize breaks self-describing formats like JSON).
-impl Serialize for Fq {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.e.serialize(serializer)
-    }
 }
 
 // Canonicity is validated at every IN-TREE construction site (this
@@ -57,10 +46,13 @@ impl<'de> Deserialize<'de> for Fq {
     }
 }
 
-/// `true` iff `x >= q` (non-canonical).
+/// `true` iff `x >= q` (non-canonical). Const so build-time and runtime
+/// validation share ONE spelling of the predicate.
 #[inline(always)]
-fn is_fq_non_canonical(x: &[u64; 4]) -> bool {
-    for i in (0..4).rev() {
+const fn is_fq_non_canonical(x: &[u64; 4]) -> bool {
+    let mut i = 4usize;
+    while i > 0 {
+        i -= 1;
         if x[i] < MODULUS[i] {
             return false;
         }
@@ -116,29 +108,37 @@ impl Fq {
         Fq { e }
     }
 
-    /// Const-context constructor: non-canonical limbs FAIL THE BUILD via
+    /// Const-position constructor: non-canonical limbs FAIL THE BUILD via
     /// const-eval panic, so table constants converted through this pay no
-    /// runtime canonicity check in guest hot loops.
+    /// runtime canonicity check in guest hot loops. Const POSITION is the
+    /// point — calling it with runtime-derived limbs runs the check at
+    /// runtime and PANICS (a provable panicking execution) rather than
+    /// spoiling; runtime-limb callers must use [`Fq::from_canonical`],
+    /// whose spoil keeps the fail-closed posture.
     pub const fn from_canonical_const(e: [u64; 4]) -> Self {
-        let mut j = 4usize;
-        let mut non_canonical = true; // e == q counts as non-canonical
-        let mut decided = false;
-        while j > 0 {
-            j -= 1;
-            if !decided {
-                if e[j] < MODULUS[j] {
-                    non_canonical = false;
-                    decided = true;
-                } else if e[j] > MODULUS[j] {
-                    non_canonical = true;
-                    decided = true;
-                }
-            }
-        }
-        if non_canonical {
+        if is_fq_non_canonical(&e) {
             panic!("non-canonical Fq constant");
         }
         Fq { e }
+    }
+
+    /// Convert a `[[u64; 4]; C]; R` constant table into validated `Fq` at
+    /// build time (each entry through [`Fq::from_canonical_const`]) —
+    /// bounds inferred from the table type, no hand-written loop limits.
+    pub const fn table_from_canonical_const<const R: usize, const C: usize>(
+        src: &[[[u64; 4]; C]; R],
+    ) -> [[Fq; C]; R] {
+        let mut out = [[Fq::ZERO; C]; R];
+        let mut r = 0;
+        while r < R {
+            let mut c = 0;
+            while c < C {
+                out[r][c] = Fq::from_canonical_const(src[r][c]);
+                c += 1;
+            }
+            r += 1;
+        }
+        out
     }
 
     pub fn to_canonical(&self) -> [u64; 4] {
@@ -339,30 +339,22 @@ impl Fq {
 // Constants are locked to arkworks by tests (curve_constants_match_arkworks).
 
 /// d = 3021
-pub const COEFF_D: Fq = Fq {
-    e: [0x0000000000000bcd, 0, 0, 0],
-};
+pub const COEFF_D: Fq = Fq::from_canonical_const([0x0000000000000bcd, 0, 0, 0]);
 /// 2d = 6042
-const TWO_D: Fq = Fq {
-    e: [0x000000000000179a, 0, 0, 0],
-};
+const TWO_D: Fq = Fq::from_canonical_const([0x000000000000179a, 0, 0, 0]);
 
-const GENERATOR_X: Fq = Fq {
-    e: [
-        0x894e2328f3ebca05,
-        0x6068dd2835790980,
-        0x6fed91c9ae9ebfa0,
-        0x09f1b5a5baf6acf0,
-    ],
-};
-const GENERATOR_Y: Fq = Fq {
-    e: [
-        0xb50a67bf1a806781,
-        0x4453c177aaf3131b,
-        0xd906b256080ba845,
-        0x09a20df36571ac3c,
-    ],
-};
+const GENERATOR_X: Fq = Fq::from_canonical_const([
+    0x894e2328f3ebca05,
+    0x6068dd2835790980,
+    0x6fed91c9ae9ebfa0,
+    0x09f1b5a5baf6acf0,
+]);
+const GENERATOR_Y: Fq = Fq::from_canonical_const([
+    0xb50a67bf1a806781,
+    0x4453c177aaf3131b,
+    0xd906b256080ba845,
+    0x09a20df36571ac3c,
+]);
 
 /// Extended twisted-Edwards coordinates (X, Y, T, Z), T = XY/Z.
 #[derive(Clone, Copy, Debug)]

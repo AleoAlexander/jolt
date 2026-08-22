@@ -229,6 +229,9 @@ mult_bench BOUND gate PASSED: welds + gadget sidecar (2.141s) + commitment equal
 ```
 
 ## b2-review-loop-20260822 — 2026-08-22 — bbe92ce6f
+(correction: measured on the then-uncommitted tree that became 0ac2eb1b3 —
+the scorecard stamps HEAD at run time, which was the parent; bbe92ce6f's
+code does not reproduce these numbers)
 ```
 "record_decrypt": 511531 RV64IMAC cycles + 44588 virtual instructions = 556119 total cycles
 "serial_number": 395226 RV64IMAC cycles + 35468 virtual instructions = 430694 total cycles
